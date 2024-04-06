@@ -23,6 +23,30 @@ func init() {
 	compiler.Draft = jsonschema.Draft4
 }
 
+func removeEmptyRequired(obj map[string]interface{}) {
+	for key, value := range obj {
+		switch v := value.(type) {
+		case []interface{}:
+			// If the value is an array, process each element if it's an object
+			for _, item := range v {
+				if itemObj, ok := item.(map[string]interface{}); ok {
+					removeEmptyRequired(itemObj)
+				}
+			}
+		case map[string]interface{}:
+			// If the value is an object, process it recursively
+			removeEmptyRequired(v)
+		}
+
+		// Remove the "required" key if it's an empty array
+		if key == "required" {
+			if arr, ok := value.([]interface{}); ok && len(arr) == 0 {
+				delete(obj, key)
+			}
+		}
+	}
+}
+
 type Asset struct {
 	id        string
 	typ       string
@@ -84,6 +108,21 @@ func New(rc global.AssetContext, typ, release string) (*Asset, error) {
 		if absPath, err = filepath.Abs(a.localPath + "/schema.json"); err != nil {
 			return
 		}
+		var data []byte
+		if data, err = os.ReadFile(absPath); err != nil {
+			return
+		}
+		schemaValue := map[string]any{}
+		if err = json.Unmarshal(data, &schemaValue); err != nil {
+			return
+		}
+		removeEmptyRequired(schemaValue)
+		if data, err = json.Marshal(schemaValue); err != nil {
+			return
+		}
+		if err = os.WriteFile(absPath, data, 0644); err != nil {
+			return
+		}
 		if a.schema, err = compiler.Compile("file://" + filepath.ToSlash(absPath)); err != nil {
 			return
 		}
@@ -94,11 +133,15 @@ func New(rc global.AssetContext, typ, release string) (*Asset, error) {
 	return a, nil
 }
 
-func (a *Asset) Validate(values json.RawMessage) error {
+func (a *Asset) Validate(values map[string]any) error {
 	if a.schema == nil {
 		return fmt.Errorf("schema not initaizlied")
 	}
 	return a.schema.Validate(values)
+}
+
+func (a *Asset) ChartPath() string {
+	return a.localPath + "/chart.tgz"
 }
 
 /*

@@ -6,24 +6,24 @@ import (
 
 	"github.com/nextbillion-ai/goreman-util/asset"
 	"github.com/nextbillion-ai/goreman-util/global"
+	"github.com/nextbillion-ai/goreman-util/operation"
 	"github.com/nextbillion-ai/gsg/lib/lock"
+	"github.com/zhchang/goquiver/raw"
 )
 
 type Resource struct {
-	cluster   string
-	namespace string
-	name      string
-	spec      *global.Spec
-	asset     *asset.Asset
-	url       string
+	name  string
+	spec  *global.Spec
+	asset *asset.Asset
+	url   string
 }
 
-func New(rc global.ResourceContext, namespace, name string, spec *global.Spec) (*Resource, error) {
+func New(rc global.ResourceContext, name string, spec *global.Spec) (*Resource, error) {
 	if rc == nil {
 		return nil, fmt.Errorf("empty resource context")
 	}
-	if namespace == "" || name == "" {
-		return nil, fmt.Errorf("invalid namespace/name: %s/%s", namespace, name)
+	if name == "" {
+		return nil, fmt.Errorf("invalid name: %s", name)
 	}
 	if spec == nil {
 		return nil, fmt.Errorf("empty spec")
@@ -34,12 +34,10 @@ func New(rc global.ResourceContext, namespace, name string, spec *global.Spec) (
 		return nil, err
 	}
 	return &Resource{
-		cluster:   rc.Cluster(),
-		namespace: namespace,
-		name:      name,
-		spec:      spec,
-		asset:     ass,
-		url:       fmt.Sprintf("%s/resources/%s/%s/%s.yaml", rc.BasePath(), rc.Cluster(), namespace, name),
+		name:  name,
+		spec:  spec,
+		asset: ass,
+		url:   fmt.Sprintf("%s/resources/%s/%s/%s.yaml", rc.BasePath(), rc.Cluster(), rc.Namespace(), name),
 	}, nil
 }
 
@@ -52,7 +50,19 @@ func (r *Resource) getLockObject() (*lock.Distributed, error) {
 	return l, nil
 }
 
-func (r *Resource) Rollout(rc global.ResourceContext) error {
+type rolloutOptions struct {
+	values map[string]any
+}
+
+type RolloutOption func(*rolloutOptions)
+
+func WithValues(values map[string]any) RolloutOption {
+	return func(ros *rolloutOptions) {
+		ros.values = values
+	}
+}
+
+func (r *Resource) Rollout(rc global.ResourceContext, options ...RolloutOption) error {
 	var err error
 	var l *lock.Distributed
 	if l, err = r.getLockObject(); err != nil {
@@ -62,8 +72,26 @@ func (r *Resource) Rollout(rc global.ResourceContext) error {
 	if err = l.Lock(rc.Context(), time.Minute*30); err != nil {
 		return err
 	}
-
-	panic("implement me")
+	ros := &rolloutOptions{}
+	for _, option := range options {
+		option(ros)
+	}
+	var g map[string]any
+	if g, err = global.GlobalSpec(rc.Cluster()); err != nil {
+		return err
+	}
+	g = raw.Merge(g, map[string]any{
+		"name":      r.name,
+		"namespace": rc.Namespace(),
+	})
+	fmt.Printf("%+v\n", g)
+	app := raw.Merge(r.spec.App, ros.values)
+	values := map[string]any{"app": app, "global": g}
+	//fmt.Printf("%+v\n", values)
+	if err = r.asset.Validate(app); err != nil {
+		return err
+	}
+	return operation.Rollout(rc, r.asset.ChartPath(), values)
 }
 
 func (r *Resource) Uninstall() error {
