@@ -5,7 +5,7 @@ go 1.22.1
 require (
 	github.com/nextbillion-ai/gsg v1.0.12
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
-	github.com/zhchang/goquiver v1.0.7-0.20240406082719-e0bbccda2890
+	github.com/zhchang/goquiver v1.0.7-0.20240407120719-f87af4ea0727
 	gopkg.in/yaml.v3 v3.0.1
 )
 

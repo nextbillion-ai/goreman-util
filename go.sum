@@ -496,6 +496,8 @@ github.com/yvasiyarov/newrelic_platform_go v0.0.0-20140908184405-b21fdbd4370f h1
 github.com/yvasiyarov/newrelic_platform_go v0.0.0-20140908184405-b21fdbd4370f/go.mod h1:GlGEuHIJweS1mbCqG+7vt2nvWLzLLnRHbXz5JKd/Qbg=
 github.com/zhchang/goquiver v1.0.7-0.20240406082719-e0bbccda2890 h1:gLc+eHlzRxwrGZNNb1TThpc1gjczVirHbekt/gpBRlY=
 github.com/zhchang/goquiver v1.0.7-0.20240406082719-e0bbccda2890/go.mod h1:A9bThmRvu2ICbEzf9P3uxbSptOJd5ybNz+nTOFM2k/Y=
+github.com/zhchang/goquiver v1.0.7-0.20240407120719-f87af4ea0727 h1:cgzqICYeCEolOfwRjxB1WZF34CKGIo6k3lHH8twQWdc=
+github.com/zhchang/goquiver v1.0.7-0.20240407120719-f87af4ea0727/go.mod h1:L2LTx4PRckLiVtrgAZmGz+tX6MU3TKBjgal1k/dkHvY=
 go.opencensus.io v0.24.0 h1:y73uSU6J157QMP2kn2r30vwW1A2W2WFwSCGnAVxeaD0=
 go.opencensus.io v0.24.0/go.mod h1:vNK8G9p7aAivkbmorf4v+7Hgx+Zs0yY+0fOtgBfjQKo=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.45.0 h1:x8Z78aZx8cOF0+Kkazoc7lwUNMGy0LrzEMxTm4BbTxg=

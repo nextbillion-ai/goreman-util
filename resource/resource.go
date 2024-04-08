@@ -84,7 +84,6 @@ func (r *Resource) Rollout(rc global.ResourceContext, options ...RolloutOption) 
 		"name":      r.name,
 		"namespace": rc.Namespace(),
 	})
-	fmt.Printf("%+v\n", g)
 	app := raw.Merge(r.spec.App, ros.values)
 	values := map[string]any{"app": app, "global": g}
 	//fmt.Printf("%+v\n", values)
