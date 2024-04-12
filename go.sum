@@ -501,6 +501,8 @@ github.com/zhchang/goquiver v1.0.7-0.20240412073327-9137420fb3dc h1:+QXl5xuLtVuU
 github.com/zhchang/goquiver v1.0.7-0.20240412073327-9137420fb3dc/go.mod h1:A9bThmRvu2ICbEzf9P3uxbSptOJd5ybNz+nTOFM2k/Y=
 github.com/zhchang/goquiver v1.0.7 h1:yQPjB2ZrvsSkmB52MaFKG7Ap4gkxt1F5plgtrQyx9Qk=
 github.com/zhchang/goquiver v1.0.7/go.mod h1:A9bThmRvu2ICbEzf9P3uxbSptOJd5ybNz+nTOFM2k/Y=
+github.com/zhchang/goquiver v1.0.8 h1:o2fN/aPBxYtqzazb+NgZPvYKHJIkPzybIwr/+I/H4oI=
+github.com/zhchang/goquiver v1.0.8/go.mod h1:A9bThmRvu2ICbEzf9P3uxbSptOJd5ybNz+nTOFM2k/Y=
 go.opencensus.io v0.24.0 h1:y73uSU6J157QMP2kn2r30vwW1A2W2WFwSCGnAVxeaD0=
 go.opencensus.io v0.24.0/go.mod h1:vNK8G9p7aAivkbmorf4v+7Hgx+Zs0yY+0fOtgBfjQKo=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.45.0 h1:x8Z78aZx8cOF0+Kkazoc7lwUNMGy0LrzEMxTm4BbTxg=
