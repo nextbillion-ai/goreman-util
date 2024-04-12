@@ -5,9 +5,11 @@ go 1.22.1
 require (
 	github.com/nextbillion-ai/gsg v1.0.12
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
-	github.com/zhchang/goquiver v1.0.7-0.20240411145352-9fbbb71b58ea
+	github.com/zhchang/goquiver v1.0.7
 	gopkg.in/yaml.v3 v3.0.1
+	k8s.io/apimachinery v0.29.3
 )
 
 require (
@@ -134,7 +136,6 @@ require (
 	github.com/rubenv/sql-migrate v1.5.2 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/cast v1.5.0 // indirect
 	github.com/spf13/cobra v1.8.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
@@ -170,7 +171,6 @@ require (
 	helm.sh/helm/v3 v3.14.3 // indirect
 	k8s.io/api v0.29.3 // indirect
 	k8s.io/apiextensions-apiserver v0.29.3 // indirect
-	k8s.io/apimachinery v0.29.3 // indirect
 	k8s.io/apiserver v0.29.3 // indirect
 	k8s.io/cli-runtime v0.29.0 // indirect
 	k8s.io/client-go v0.29.3 // indirect
