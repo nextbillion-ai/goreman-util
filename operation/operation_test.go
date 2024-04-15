@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/nextbillion-ai/goreman-util/global"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/raw"
@@ -183,10 +185,11 @@ spec:
 	if df, err = raw.Diff(old, new); err != nil {
 		df = nil
 	}
+	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
 
 	toRemoves := []toRemove{}
 	var rotated bool
-	if rotated, err = rotateSts(context.Background(), old, &new, &toRemoves, df); err != nil {
+	if rotated, err = rotateSts(rc, old, &new, &toRemoves, df); err != nil {
 		panic(err)
 	}
 	assert.True(t, rotated)
@@ -237,10 +240,10 @@ spec:
 	if df, err = raw.Diff(old, new); err != nil {
 		df = nil
 	}
-
+	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
 	toRemoves := []toRemove{}
 	var rotated bool
-	if rotated, err = rotateSts(context.Background(), old, &new, &toRemoves, df); err != nil {
+	if rotated, err = rotateSts(rc, old, &new, &toRemoves, df); err != nil {
 		panic(err)
 	}
 	assert.False(t, rotated)

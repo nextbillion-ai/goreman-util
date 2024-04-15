@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -52,6 +53,7 @@ type ResourceContext interface {
 	Context() context.Context
 	Namespace() string
 	Timeout() time.Duration
+	Logger() *logrus.Logger
 }
 
 type rcImpl struct {
@@ -61,6 +63,7 @@ type rcImpl struct {
 	basePath  string
 	ctx       context.Context
 	timeout   time.Duration
+	logger    *logrus.Logger
 }
 
 // BasePath implements ResourceContext.
@@ -93,6 +96,10 @@ func (r *rcImpl) WorkPath() string {
 	return r.workPath
 }
 
+func (r *rcImpl) Logger() *logrus.Logger {
+	return r.logger
+}
+
 type ContextOption func(*rcImpl)
 
 func WithNamespace(namespace string) ContextOption {
@@ -113,8 +120,15 @@ func WithTimeout(timeout time.Duration) ContextOption {
 	return func(r *rcImpl) { r.timeout = timeout }
 }
 
+func WithLogLevel(level logrus.Level) ContextOption {
+	return func(r *rcImpl) { r.logger.SetLevel(level) }
+}
+
 func NewContext(ctx context.Context, options ...ContextOption) ResourceContext {
-	r := &rcImpl{ctx: ctx}
+	r := &rcImpl{
+		ctx:    ctx,
+		logger: logrus.New(),
+	}
 	for _, option := range options {
 		option(r)
 	}

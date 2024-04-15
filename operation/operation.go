@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/nextbillion-ai/goreman-util/global"
-	"github.com/sirupsen/logrus"
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/raw"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +19,10 @@ type toRemove struct {
 	name      string
 	namespace string
 	kind      k8s.Kind
+}
+
+func resourceKey(kind, name string) string {
+	return kind + name
 }
 
 func getExistingManifest(ctx context.Context, name, namespace string) (existing []k8s.Resource, err error) {
@@ -35,8 +38,8 @@ func getExistingManifest(ctx context.Context, name, namespace string) (existing 
 	return
 }
 
-func getManifests(ctx context.Context, chartPath string, values raw.Map) (old []k8s.Resource, new []k8s.Resource, newMap map[string]*k8s.Resource, err error) {
-	if new, err = k8s.GenManifest(ctx, chartPath, values); err != nil {
+func getManifests(ctx context.Context, chartPath string, values raw.Map) (old []k8s.Resource, new []k8s.Resource, newMap map[string]*k8s.Resource, newStr string, err error) {
+	if new, newStr, err = k8s.GenManifest(ctx, chartPath, values); err != nil {
 		return
 	}
 	var name, namespace string
@@ -51,7 +54,7 @@ func getManifests(ctx context.Context, chartPath string, values raw.Map) (old []
 	}
 	newMap = map[string]*k8s.Resource{}
 	for _, r := range new {
-		newMap[r.GetObjectKind().GroupVersionKind().Kind+"-"+r.GetName()] = &r
+		newMap[resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())] = &r
 	}
 	err = nil
 	return
@@ -189,17 +192,17 @@ func getLabel(meta *metav1.ObjectMeta, key string) string {
 	return meta.Labels[key]
 }
 
-func rotateSts(ctx context.Context, old k8s.Resource, new *k8s.Resource, toRemoves *[]toRemove, df raw.Map) (rotated bool, err error) {
+func rotateSts(rc global.ResourceContext, old k8s.Resource, new *k8s.Resource, toRemoves *[]toRemove, df raw.Map) (rotated bool, err error) {
 	//var changed = len(df) > 0
 	var sts *k8s.StatefulSet
 	if sts, err = k8s.Parse[*k8s.StatefulSet](old); err != nil {
 		return
 	}
 	sr := len(df) > 0 && shouldRotate(df, sts)
-	logrus.Infof("trying to rotate manifest for %s/%s", sts.GetNamespace(), sts.GetName())
-	var current = getCurrentRotation(ctx, sts)
+	rc.Logger().Infof("trying to rotate manifest for %s/%s", sts.GetNamespace(), sts.GetName())
+	var current = getCurrentRotation(rc.Context(), sts)
 	if current != nil {
-		logrus.Infof(`current rotation for %s/%s is %d`, sts.GetNamespace(), sts.GetName(), current.rotation)
+		rc.Logger().Infof(`current rotation for %s/%s is %d`, sts.GetNamespace(), sts.GetName(), current.rotation)
 	}
 	var removeAll bool
 	var newStsName string = sts.GetName()
@@ -238,7 +241,7 @@ func rotateSts(ctx context.Context, old k8s.Resource, new *k8s.Resource, toRemov
 			*toRemoves = append(*toRemoves, toRemove{name: remove, namespace: ns, kind: k8s.KindStatefulSet})
 		}
 	}
-	logrus.Infof(`applying rotation: %s`, newSts.GetName())
+	rc.Logger().Infof(`applying rotation: %s`, newSts.GetName())
 	*new = newSts
 	err = nil
 	return
@@ -264,8 +267,12 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	var err error
 	var old, new []k8s.Resource
 	var newMap map[string]*k8s.Resource
-	if old, new, newMap, err = getManifests(rc.Context(), chartPath, values); err != nil {
+	var newStr string
+	if old, new, newMap, newStr, err = getManifests(rc.Context(), chartPath, values); err != nil {
 		return err
+	}
+	if len(new) == 0 {
+		return fmt.Errorf("nothing to rollout")
 	}
 
 	var toRemoves []toRemove
@@ -274,7 +281,7 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	var rotated bool
 	for _, r := range old {
 		kind := r.GetObjectKind().GroupVersionKind().Kind
-		key := kind + "-" + r.GetName()
+		key := resourceKey(kind, r.GetName())
 		var ok bool
 		var nr *k8s.Resource
 		if nr, ok = newMap[key]; !ok {
@@ -286,9 +293,13 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 			df = nil
 		}
 		changed[key] = len(df) > 0
-		if r.GetObjectKind().GroupVersionKind().Kind == k8s.KindStatefulSet {
+		if changed[key] {
+			fmt.Printf("%+v\n", df)
+		}
+		rc.Logger().Debugf("%s changed: %t", key, changed[key])
+		if kind == k8s.KindStatefulSet {
 			var _rotated bool
-			if _rotated, err = rotateSts(rc.Context(), r, nr, &toRemoves, df); err != nil {
+			if _rotated, err = rotateSts(rc, r, nr, &toRemoves, df); err != nil {
 				return err
 			}
 			if !rotated && _rotated {
@@ -299,10 +310,25 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	if !rotated {
 		opts.wait = time.Duration(0)
 	}
-	return apply(rc.Context(), new, toRemoves, opts.wait, changed)
+	if err = apply(rc, new, toRemoves, opts.wait, changed); err != nil {
+		return err
+	}
+	return writeManifest(rc.Context(), newStr, new[0].GetName(), new[0].GetNamespace())
 }
 
-func apply(ctx context.Context, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (err error) {
+func writeManifest(ctx context.Context, value, name, namespace string) error {
+
+	var manifest k8s.ConfigMap
+	manifest.Kind = k8s.KindConfigMap
+	manifest.ObjectMeta.Name = name + "-manifest"
+	manifest.ObjectMeta.Namespace = namespace
+	manifest.Data = map[string]string{
+		"manifest": value,
+	}
+	return k8s.Rollout(ctx, &manifest)
+}
+
+func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (err error) {
 	stsNameToRealName := map[string]string{}
 	for _, r := range new {
 		kind := r.GetObjectKind().GroupVersionKind().Kind
@@ -322,7 +348,7 @@ func apply(ctx context.Context, new []k8s.Resource, toRemoves []toRemove, wait t
 
 	for _, r := range new {
 		kind := r.GetObjectKind().GroupVersionKind().Kind
-		key := kind + r.GetName()
+		key := resourceKey(kind, r.GetName())
 		if kind == k8s.KindHorizontalPodAutoscaler {
 			var hpa *k8s.HorizontalPodAutoscaler
 			hpa, _ = k8s.Parse[*k8s.HorizontalPodAutoscaler](r)
@@ -339,17 +365,18 @@ func apply(ctx context.Context, new []k8s.Resource, toRemoves []toRemove, wait t
 		}
 		var didChange, exists bool
 		if didChange, exists = changed[key]; exists && !didChange {
-			logrus.Infof(`applyManifest skipped for item: %s`, key)
+			rc.Logger().Infof(`applyManifest skipped for item: %s`, key)
 			continue
 		}
-		if err = k8s.Rollout(ctx, r, k8s.WithWait(wait)); err != nil {
+		rc.Logger().Debugf(`applyManifest going for item: %s,conditons: %t,%t`, key, didChange, exists)
+		if err = k8s.Rollout(rc.Context(), r, k8s.WithWait(wait)); err != nil {
 			return
 		}
 	}
 
 	for _, r := range toRemoves {
-		if err = k8s.Remove(ctx, r.name, r.namespace, r.kind, k8s.WithWait(2*time.Minute)); err != nil {
-			logrus.Warnf("failed to remove %s-%s/%s: %s", r.kind, r.namespace, r.name, err)
+		if err = k8s.Remove(rc.Context(), r.name, r.namespace, r.kind, k8s.WithWait(2*time.Minute)); err != nil {
+			rc.Logger().Warnf("failed to remove %s-%s/%s: %s", r.kind, r.namespace, r.name, err)
 		}
 	}
 	err = nil
@@ -368,7 +395,7 @@ func Remove(rc global.ResourceContext, name, namespace string, options ...Operat
 	}
 	for _, r := range old {
 		if err = k8s.Remove(rc.Context(), r.GetName(), r.GetNamespace(), r.GetObjectKind().GroupVersionKind().Kind, k8s.WithWait(opts.wait)); err != nil {
-			logrus.Warnf("failed to remove %s-%s/%s: %s", r.GetObjectKind().GroupVersionKind().Kind, r.GetNamespace(), r.GetName(), err)
+			rc.Logger().Warnf("failed to remove %s-%s/%s: %s", r.GetObjectKind().GroupVersionKind().Kind, r.GetNamespace(), r.GetName(), err)
 		}
 	}
 	return nil

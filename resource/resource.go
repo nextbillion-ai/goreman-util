@@ -50,19 +50,26 @@ func (r *Resource) getLockObject() (*lock.Distributed, error) {
 	return l, nil
 }
 
-type rolloutOptions struct {
+type resourceOptions struct {
 	values map[string]any
+	wait   time.Duration
 }
 
-type RolloutOption func(*rolloutOptions)
+type ResourceOption func(*resourceOptions)
 
-func WithValues(values map[string]any) RolloutOption {
-	return func(ros *rolloutOptions) {
+func WithValues(values map[string]any) ResourceOption {
+	return func(ros *resourceOptions) {
 		ros.values = values
 	}
 }
 
-func (r *Resource) Rollout(rc global.ResourceContext, options ...RolloutOption) error {
+func WithWait(wait time.Duration) ResourceOption {
+	return func(ros *resourceOptions) {
+		ros.wait = wait
+	}
+}
+
+func (r *Resource) Rollout(rc global.ResourceContext, options ...ResourceOption) error {
 	var err error
 	var l *lock.Distributed
 	if l, err = r.getLockObject(); err != nil {
@@ -72,7 +79,7 @@ func (r *Resource) Rollout(rc global.ResourceContext, options ...RolloutOption) 
 	if err = l.Lock(rc.Context(), time.Minute*30); err != nil {
 		return err
 	}
-	ros := &rolloutOptions{}
+	ros := &resourceOptions{}
 	for _, option := range options {
 		option(ros)
 	}
@@ -90,9 +97,21 @@ func (r *Resource) Rollout(rc global.ResourceContext, options ...RolloutOption) 
 	if err = r.asset.Validate(app); err != nil {
 		return err
 	}
-	return operation.Rollout(rc, r.asset.ChartPath(), values)
+	oos := []operation.OperationOption{}
+	if ros.wait > 0 {
+		oos = append(oos, operation.WithWait(ros.wait))
+	}
+	return operation.Rollout(rc, r.asset.ChartPath(), values, oos...)
 }
 
-func (r *Resource) Uninstall() error {
-	panic("implement me")
+func (r *Resource) Uninstall(rc global.ResourceContext, options ...ResourceOption) error {
+	ros := &resourceOptions{}
+	for _, option := range options {
+		option(ros)
+	}
+	oos := []operation.OperationOption{}
+	if ros.wait > 0 {
+		oos = append(oos, operation.WithWait(ros.wait))
+	}
+	return operation.Remove(rc, r.name, rc.Namespace(), oos...)
 }
