@@ -293,9 +293,6 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 			df = nil
 		}
 		changed[key] = len(df) > 0
-		if changed[key] {
-			fmt.Printf("%+v\n", df)
-		}
 		rc.Logger().Debugf("%s changed: %t", key, changed[key])
 		if kind == k8s.KindStatefulSet {
 			var _rotated bool
