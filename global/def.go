@@ -10,6 +10,15 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
+// Spec represents a specification that includes information about an asset and an application.
+// It is used to parse specifications from YAML files or other types of input data.
+//
+// Fields:
+// Asset: A struct that contains the type and release version of the asset.
+// App: A map that contains application-specific data.
+//
+// The Asset field is tagged with `yaml:"asset"` to specify the YAML name of the field.
+// The App field is tagged with `yaml:"app"` to specify the YAML name of the field.
 type Spec struct {
 	Asset struct {
 		Typ     string `yaml:"type"`
@@ -47,6 +56,16 @@ type AssetContext interface {
 	BasePath() string
 }
 
+// ResourceContext is an interface that extends the AssetContext interface and
+// provides additional methods for accessing the cluster, context, namespace,
+// timeout, and logger associated with a resource.
+//
+// Methods:
+// Cluster: Returns the cluster associated with the resource.
+// Context: Returns the context associated with the resource.
+// Namespace: Returns the namespace associated with the resource.
+// Timeout: Returns the timeout duration for operations on the resource.
+// Logger: Returns the logger associated with the resource.
 type ResourceContext interface {
 	AssetContext
 	Cluster() string

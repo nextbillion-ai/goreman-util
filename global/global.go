@@ -10,15 +10,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Plugin struct {
-	Name string
-	Keys []string
-	Url  string
-}
-
 var globalSpecOnce sync.Once
 var globalSpec map[string]any
 
+// GlobalSpec retrieves the global specification for a given cluster.
+// It reads the specification from a YAML file located in a Google Cloud Storage bucket.
+// The cluster parameter specifies the name of the cluster.
+// The function returns a map[string]any containing the global specification and an error, if any.
 func GlobalSpec(cluster string) (map[string]any, error) {
 	var err error
 	globalSpecOnce.Do(func() {

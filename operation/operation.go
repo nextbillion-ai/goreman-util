@@ -1,3 +1,10 @@
+// Package operation provides utilities for managing and manipulating Kubernetes resources.
+// It includes functionalities for handling Kubernetes operations such as getting existing
+// manifests, and managing resources to be removed.
+//
+// The package uses the "github.com/nextbillion-ai/goreman-util/global" library for global
+// configurations and specifications, "github.com/zhchang/goquiver/k8s" for Kubernetes
+// operations, and "github.com/zhchang/goquiver/raw" for raw data operations.
 package operation
 
 import (
@@ -253,12 +260,19 @@ type operationOptions struct {
 
 type OperationOption func(*operationOptions)
 
+// WithWait sets the wait duration for an operation.
+// The wait duration specifies how long the operation should wait before timing out.
+// It returns an OperationOption that can be used to configure the operation.
 func WithWait(d time.Duration) OperationOption {
 	return func(opts *operationOptions) {
 		opts.wait = d
 	}
 }
 
+// Rollout applies a rolling update to the Kubernetes resources defined in the specified chart.
+// It compares the existing resources with the new resources and performs necessary updates.
+// The function takes a resource context, chart path, values, and optional operation options as parameters.
+// It returns an error if any error occurs during the rollout process.
 func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, options ...OperationOption) error {
 	opts := &operationOptions{}
 	for _, opt := range options {
@@ -380,6 +394,10 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 	return
 }
 
+// Remove removes a resource from a given namespace.
+// It takes a resource context, the name and namespace of the resource to be removed,
+// and optional operation options.
+// It returns an error if there was a problem removing the resource.
 func Remove(rc global.ResourceContext, name, namespace string, options ...OperationOption) error {
 	opts := &operationOptions{}
 	for _, opt := range options {

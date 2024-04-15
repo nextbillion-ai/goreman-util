@@ -1,3 +1,13 @@
+// Package resource provides utilities for managing and manipulating Kubernetes resources.
+// It includes functionalities for handling resource operations such as installation,
+// uninstallation, and validation.
+//
+// The package uses the "github.com/nextbillion-ai/goreman-util/global" library for global
+// configurations and specifications, "github.com/zhchang/goquiver/k8s" for Kubernetes
+// operations, and "github.com/zhchang/goquiver/raw" for raw data operations.
+//
+// The main type in this package is Resource, which represents a Kubernetes resource.
+// It provides methods for installing, uninstalling, and validating the resource.
 package resource
 
 import (
@@ -18,6 +28,8 @@ type Resource struct {
 	url   string
 }
 
+// New creates a new Resource instance with the given resource context, name, and spec.
+// It returns a pointer to the created Resource and an error, if any.
 func New(rc global.ResourceContext, name string, spec *global.Spec) (*Resource, error) {
 	if rc == nil {
 		return nil, fmt.Errorf("empty resource context")
@@ -57,18 +69,26 @@ type resourceOptions struct {
 
 type ResourceOption func(*resourceOptions)
 
+// WithValues sets the values for a resource option.
+// It takes a map of string to any as input and returns a ResourceOption function.
+// The returned function sets the values of the resource options.
 func WithValues(values map[string]any) ResourceOption {
 	return func(ros *resourceOptions) {
 		ros.values = values
 	}
 }
 
+// WithWait sets the wait duration for a resource option.
 func WithWait(wait time.Duration) ResourceOption {
 	return func(ros *resourceOptions) {
 		ros.wait = wait
 	}
 }
 
+// Rollout performs a resource rollout operation.
+// It acquires a lock, merges global and app-specific options, validates the asset,
+// and then triggers the rollout operation using the provided resource context and options.
+// The function returns an error if any of the operations fail.
 func (r *Resource) Rollout(rc global.ResourceContext, options ...ResourceOption) error {
 	var err error
 	var l *lock.Distributed
@@ -104,6 +124,11 @@ func (r *Resource) Rollout(rc global.ResourceContext, options ...ResourceOption)
 	return operation.Rollout(rc, r.asset.ChartPath(), values, oos...)
 }
 
+// Uninstall removes the resource from the cluster.
+// It takes a global.ResourceContext and optional ResourceOption(s) as parameters.
+// The ResourceOptions can be used to customize the uninstallation process.
+// If the wait duration is specified in the ResourceOptions, it will wait for the resource to be removed before returning.
+// It returns an error if the uninstallation fails.
 func (r *Resource) Uninstall(rc global.ResourceContext, options ...ResourceOption) error {
 	ros := &resourceOptions{}
 	for _, option := range options {
