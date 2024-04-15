@@ -47,7 +47,7 @@ func getManifests(ctx context.Context, chartPath string, values raw.Map) (old []
 		return
 	}
 	if old, err = getExistingManifest(ctx, name, namespace); err != nil {
-		return
+		old = nil
 	}
 	newMap = map[string]*k8s.Resource{}
 	for _, r := range new {
@@ -337,7 +337,8 @@ func apply(ctx context.Context, new []k8s.Resource, toRemoves []toRemove, wait t
 
 			}
 		}
-		if !changed[key] {
+		var didChange, exists bool
+		if didChange, exists = changed[key]; exists && !didChange {
 			logrus.Infof(`applyManifest skipped for item: %s`, key)
 			continue
 		}
