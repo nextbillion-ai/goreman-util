@@ -50,7 +50,7 @@ func New(rc global.ResourceContext, name string, spec *global.Spec) (*Resource, 
 		Name:  name,
 		Spec:  spec,
 		Asset: ass,
-		Url:   fmt.Sprintf("%s/resources/%s/%s/%s.yaml", rc.BasePath(), rc.Cluster(), rc.Namespace(), name),
+		Url:   fmt.Sprintf("%s/resources/%s/%s/%s.yaml", global.MustHaveOptions().Basepath, global.MustHaveOptions().Cluster, rc.Namespace(), name),
 	}, nil
 }
 
@@ -112,7 +112,7 @@ func (r *Resource) Rollout(rc global.ResourceContext, options ...ResourceOption)
 	g = raw.Merge(g, map[string]any{
 		"name":       r.Name,
 		"namespace":  rc.Namespace(),
-		"cluster":    rc.Cluster(),
+		"cluster":    global.MustHaveOptions().Cluster,
 		"ts":         ts,
 		"deployTime": strconv.FormatInt(ts, 10),
 	})

@@ -2,17 +2,26 @@ package global
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/nextbillion-ai/gsg/lib/object"
+	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/raw"
 	"gopkg.in/yaml.v3"
 )
 
-var globalSpecOnce sync.Once
-var _globalValues map[string]any
+var globalOptionsOnce sync.Once
+
+type Options struct {
+	Cluster  string
+	Basepath string
+	Values   raw.Map
+}
+
+var _globalOptions *Options
 
 var readGCSYaml = func(url string) (values raw.Map, err error) {
 	var o *object.Object
@@ -31,34 +40,19 @@ var readGCSYaml = func(url string) (values raw.Map, err error) {
 	return
 }
 
-// GlobalSpec retrieves the global specification for a given cluster.
-// It reads the specification from a YAML file located in a Google Cloud Storage bucket.
-// The cluster parameter specifies the name of the cluster.
-// The function returns a map[string]any containing the global specification and an error, if any.
-var globalValues = func(cluster string) (map[string]any, error) {
-	var err error
-	globalSpecOnce.Do(func() {
-		var _that raw.Map
-		if _that, err = readGCSYaml(fmt.Sprintf("gs://nb-data/infra/asgard/clusters/%s.yaml", cluster)); err != nil {
-			return
-		}
-		if _globalValues, err = raw.Get[map[string]any](_that, "global"); err != nil {
-			return
-		}
-	})
-	return _globalValues, err
-}
-
 var GlobalSpec = func(rc ResourceContext, name string, appValue raw.Map) (spec raw.Map, err error) {
-	if spec, err = globalValues(rc.Cluster()); err != nil {
+	if _globalOptions == nil {
+		err = fmt.Errorf("not properly inited")
 		return
 	}
+	spec = _globalOptions.Values
+
 	for _, plugin := range rc.Plugins() {
 		if plugin.Name == "" || plugin.Url == "" || len(plugin.Keys) == 0 {
 			rc.Logger().Warnf("plugin %s not loaded because its name/url/keys are empty", plugin.Name)
 			continue
 		}
-		plugin.Url = strings.ReplaceAll(plugin.Url, `{cluster}`, rc.Cluster())
+		plugin.Url = strings.ReplaceAll(plugin.Url, `{cluster}`, _globalOptions.Cluster)
 		plugin.Url = strings.ReplaceAll(plugin.Url, `{namespace}`, rc.Namespace())
 		plugin.Url = strings.ReplaceAll(plugin.Url, `{name}`, name)
 		for _, item := range []string{"area", "mode", "context"} {
@@ -82,5 +76,39 @@ var GlobalSpec = func(rc ResourceContext, name string, appValue raw.Map) (spec r
 		}
 		spec[plugin.Name] = object
 	}
+	return
+}
+
+var MustHaveOptions = func() *Options {
+	if _globalOptions == nil {
+		panic("not initialized")
+	}
+	return _globalOptions
+}
+
+func InitFromConfigMap(name, namespace string) (err error) {
+	globalOptionsOnce.Do(func() {
+		_globalOptions = &Options{}
+		var cfgMap *k8s.ConfigMap
+		if cfgMap, err = k8s.Get[*k8s.ConfigMap](context.Background(), name, namespace); err != nil {
+			return
+		}
+		_globalOptions.Cluster = cfgMap.Data["CLUSTER"]
+		_globalOptions.Basepath = cfgMap.Data["OP_BASEPATH"]
+		if _globalOptions.Cluster == "" {
+			err = fmt.Errorf("failed to read config from cluster")
+			return
+		}
+		if _globalOptions.Basepath == "" {
+			_globalOptions.Basepath = "gs://fm-op-" + _globalOptions.Cluster
+		}
+		var _that raw.Map
+		if _that, err = readGCSYaml(fmt.Sprintf("gs://nb-data/infra/asgard/clusters/%s.yaml", _globalOptions.Cluster)); err != nil {
+			return
+		}
+		if _globalOptions.Values, err = raw.Get[map[string]any](_that, "global"); err != nil {
+			return
+		}
+	})
 	return
 }

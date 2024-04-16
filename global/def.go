@@ -59,7 +59,6 @@ type Plugin struct {
 
 type AssetContext interface {
 	WorkPath() string
-	BasePath() string
 }
 
 // ResourceContext is an interface that extends the AssetContext interface and
@@ -74,7 +73,6 @@ type AssetContext interface {
 // Logger: Returns the logger associated with the resource.
 type ResourceContext interface {
 	AssetContext
-	Cluster() string
 	Context() context.Context
 	Namespace() string
 	Timeout() time.Duration
@@ -83,24 +81,12 @@ type ResourceContext interface {
 }
 
 type rcImpl struct {
-	cluster   string
 	namespace string
 	workPath  string
-	basePath  string
 	ctx       context.Context
 	timeout   time.Duration
 	logger    *logrus.Logger
 	plugins   []*Plugin
-}
-
-// BasePath implements ResourceContext.
-func (r *rcImpl) BasePath() string {
-	return r.basePath
-}
-
-// Cluster implements ResourceContext.
-func (r *rcImpl) Cluster() string {
-	return r.cluster
 }
 
 // Context implements ResourceContext.
@@ -137,13 +123,6 @@ func WithNamespace(namespace string) ContextOption {
 	return func(r *rcImpl) { r.namespace = namespace }
 }
 
-func WithCluster(cluster string) ContextOption {
-	return func(r *rcImpl) { r.cluster = cluster }
-}
-
-func WithBasePath(basePath string) ContextOption {
-	return func(r *rcImpl) { r.basePath = basePath }
-}
 func WithWorkPath(workPath string) ContextOption {
 	return func(r *rcImpl) { r.workPath = workPath }
 }

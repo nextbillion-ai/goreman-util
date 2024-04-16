@@ -10,10 +10,10 @@ import (
 
 func TestGlobalSpec(t *testing.T) {
 	readGCSYamlOrg := readGCSYaml
-	globalValuesOrg := globalValues
+	_globalOptionsOrg := _globalOptions
 	defer func() {
 		readGCSYaml = readGCSYamlOrg
-		globalValues = globalValuesOrg
+		_globalOptions = _globalOptionsOrg
 	}()
 	var gcsMock = raw.Map{
 		"mockkey1": "mockvalue1",
@@ -22,11 +22,9 @@ func TestGlobalSpec(t *testing.T) {
 	readGCSYaml = func(url string) (raw.Map, error) {
 		return gcsMock, nil
 	}
-	globalValues = func(cluster string) (raw.Map, error) {
-		return raw.Map{}, nil
-	}
+	_globalOptions = &Options{Values: raw.Map{}}
 
-	rc := NewContext(context.Background(), WithNamespace("mock-ns"), WithCluster("mock-cluster"), WithPlugins([]*Plugin{
+	rc := NewContext(context.Background(), WithNamespace("mock-ns"), WithPlugins([]*Plugin{
 		{
 			Name: "mock-plugin-name",
 			Url:  "{namespace}-{cluster}-{name}",

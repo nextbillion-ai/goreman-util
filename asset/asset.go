@@ -98,7 +98,7 @@ func New(rc global.AssetContext, typ, release string) (*Asset, error) {
 		wp = "/tmp/.operator/cache/assets"
 	}
 	a.localPath = fmt.Sprintf("%s/%s/%s", wp, typ, release)
-	a.url = fmt.Sprintf("%s/assets/%s/releases/%s", rc.BasePath(), typ, release)
+	a.url = fmt.Sprintf("%s/assets/%s/releases/%s", global.MustHaveOptions().Basepath, typ, release)
 	a.id = a.typ + "-" + a.release
 	var once sync.Once
 	loaderCache.SetIfNotExists(a.id, &once)
