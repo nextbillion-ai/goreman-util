@@ -413,5 +413,8 @@ func Remove(rc global.ResourceContext, name, namespace string, options ...Operat
 			rc.Logger().Warnf("failed to remove %s-%s/%s: %s", r.GetObjectKind().GroupVersionKind().Kind, r.GetNamespace(), r.GetName(), err)
 		}
 	}
+	if err = k8s.Remove(rc.Context(), name+"-manifest", namespace, k8s.KindConfigMap, k8s.WithWait(opts.wait)); err != nil {
+		return err
+	}
 	return nil
 }

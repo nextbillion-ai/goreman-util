@@ -93,14 +93,18 @@ func InitFromConfigMap(name, namespace string) (err error) {
 		if cfgMap, err = k8s.Get[*k8s.ConfigMap](context.Background(), name, namespace); err != nil {
 			return
 		}
-		_globalOptions.Cluster = cfgMap.Data["CLUSTER"]
-		_globalOptions.Basepath = cfgMap.Data["OP_BASEPATH"]
-		if _globalOptions.Cluster == "" {
+		var cluster, basePath string
+		cluster = cfgMap.Data["CLUSTER"]
+		basePath = cfgMap.Data["OP_BASEPATH"]
+		if cluster == "" {
 			err = fmt.Errorf("failed to read config from cluster")
 			return
 		}
-		if _globalOptions.Basepath == "" {
-			_globalOptions.Basepath = "gs://fm-op-" + _globalOptions.Cluster
+		_globalOptions.Cluster = cluster
+		if basePath != "" {
+			_globalOptions.Basepath = "gs://fm-op-" + basePath
+		} else {
+			_globalOptions.Basepath = "gs://fm-op-" + cluster
 		}
 		var _that raw.Map
 		if _that, err = readGCSYaml(fmt.Sprintf("gs://nb-data/infra/asgard/clusters/%s.yaml", _globalOptions.Cluster)); err != nil {
