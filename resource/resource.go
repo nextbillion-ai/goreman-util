@@ -12,6 +12,7 @@ package resource
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nextbillion-ai/goreman-util/asset"
@@ -22,10 +23,10 @@ import (
 )
 
 type Resource struct {
-	name  string
-	spec  *global.Spec
-	asset *asset.Asset
-	url   string
+	Name  string
+	Spec  *global.Spec
+	Asset *asset.Asset
+	Url   string
 }
 
 // New creates a new Resource instance with the given resource context, name, and spec.
@@ -46,17 +47,17 @@ func New(rc global.ResourceContext, name string, spec *global.Spec) (*Resource, 
 		return nil, err
 	}
 	return &Resource{
-		name:  name,
-		spec:  spec,
-		asset: ass,
-		url:   fmt.Sprintf("%s/resources/%s/%s/%s.yaml", rc.BasePath(), rc.Cluster(), rc.Namespace(), name),
+		Name:  name,
+		Spec:  spec,
+		Asset: ass,
+		Url:   fmt.Sprintf("%s/resources/%s/%s/%s.yaml", rc.BasePath(), rc.Cluster(), rc.Namespace(), name),
 	}, nil
 }
 
 func (r *Resource) getLockObject() (*lock.Distributed, error) {
 	var err error
 	var l *lock.Distributed
-	if l, err = lock.NewWithUrl(r.url + ".lock"); err != nil {
+	if l, err = lock.NewWithUrl(r.Url + ".lock"); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -104,24 +105,28 @@ func (r *Resource) Rollout(rc global.ResourceContext, options ...ResourceOption)
 		option(ros)
 	}
 	var g map[string]any
-	if g, err = global.GlobalSpec(rc.Cluster()); err != nil {
+	if g, err = global.GlobalSpec(rc, r.Name, r.Spec.App); err != nil {
 		return err
 	}
+	ts := time.Now().Unix()
 	g = raw.Merge(g, map[string]any{
-		"name":      r.name,
-		"namespace": rc.Namespace(),
+		"name":       r.Name,
+		"namespace":  rc.Namespace(),
+		"cluster":    rc.Cluster(),
+		"ts":         ts,
+		"deployTime": strconv.FormatInt(ts, 10),
 	})
-	app := raw.Merge(r.spec.App, ros.values)
+	app := raw.Merge(r.Spec.App, ros.values)
 	values := map[string]any{"app": app, "global": g}
 	//fmt.Printf("%+v\n", values)
-	if err = r.asset.Validate(app); err != nil {
+	if err = r.Asset.Validate(app); err != nil {
 		return err
 	}
 	oos := []operation.OperationOption{}
 	if ros.wait > 0 {
 		oos = append(oos, operation.WithWait(ros.wait))
 	}
-	return operation.Rollout(rc, r.asset.ChartPath(), values, oos...)
+	return operation.Rollout(rc, r.Asset.ChartPath(), values, oos...)
 }
 
 // Uninstall removes the resource from the cluster.
@@ -138,5 +143,5 @@ func (r *Resource) Uninstall(rc global.ResourceContext, options ...ResourceOptio
 	if ros.wait > 0 {
 		oos = append(oos, operation.WithWait(ros.wait))
 	}
-	return operation.Remove(rc, r.name, rc.Namespace(), oos...)
+	return operation.Remove(rc, r.Name, rc.Namespace(), oos...)
 }

@@ -51,6 +51,12 @@ func SpecFromYaml(input any) (*Spec, error) {
 	return &spec, nil
 }
 
+type Plugin struct {
+	Name string
+	Url  string
+	Keys []string
+}
+
 type AssetContext interface {
 	WorkPath() string
 	BasePath() string
@@ -73,6 +79,7 @@ type ResourceContext interface {
 	Namespace() string
 	Timeout() time.Duration
 	Logger() *logrus.Logger
+	Plugins() []*Plugin
 }
 
 type rcImpl struct {
@@ -83,6 +90,7 @@ type rcImpl struct {
 	ctx       context.Context
 	timeout   time.Duration
 	logger    *logrus.Logger
+	plugins   []*Plugin
 }
 
 // BasePath implements ResourceContext.
@@ -119,6 +127,10 @@ func (r *rcImpl) Logger() *logrus.Logger {
 	return r.logger
 }
 
+func (r *rcImpl) Plugins() []*Plugin {
+	return r.plugins
+}
+
 type ContextOption func(*rcImpl)
 
 func WithNamespace(namespace string) ContextOption {
@@ -141,6 +153,10 @@ func WithTimeout(timeout time.Duration) ContextOption {
 
 func WithLogLevel(level logrus.Level) ContextOption {
 	return func(r *rcImpl) { r.logger.SetLevel(level) }
+}
+
+func WithPlugins(plugins []*Plugin) ContextOption {
+	return func(r *rcImpl) { r.plugins = plugins }
 }
 
 func NewContext(ctx context.Context, options ...ContextOption) ResourceContext {
