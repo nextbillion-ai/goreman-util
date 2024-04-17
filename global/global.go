@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nextbillion-ai/gsg/lib/object"
+	"github.com/zhchang/goquiver/cache"
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/raw"
 	"gopkg.in/yaml.v3"
@@ -23,21 +25,32 @@ type Options struct {
 
 var _globalOptions *Options
 
+var gcsCache *cache.Cache[string, raw.Map]
+var _gcsCacheOnce sync.Once
+
 var readGCSYaml = func(url string) (values raw.Map, err error) {
-	var o *object.Object
-	if o, err = object.New(url); err != nil {
-		return
+	_gcsCacheOnce.Do(func() {
+		gcsCache = cache.New[string, raw.Map](cache.WithRefreshInterval(30 * time.Minute))
+	})
+	if values, err = gcsCache.Get(url, cache.WithStale[raw.Map](), cache.WithTTL[raw.Map](1*time.Hour), cache.WithRefresher[raw.Map](func() (raw.Map, error) {
+		var err error
+		var o *object.Object
+		if o, err = object.New(url); err != nil {
+			return nil, err
+		}
+		var buf bytes.Buffer
+		if err = o.Read(&buf); err != nil {
+			return nil, err
+		}
+		values = raw.Map{}
+		if err = yaml.Unmarshal(buf.Bytes(), values); err != nil {
+			return nil, err
+		}
+		return values, nil
+	})); err != nil {
+		return nil, err
 	}
-	var buf bytes.Buffer
-	if err = o.Read(&buf); err != nil {
-		return
-	}
-	values = raw.Map{}
-	if err = yaml.Unmarshal(buf.Bytes(), values); err != nil {
-		return
-	}
-	err = nil
-	return
+	return values, nil
 }
 
 var GlobalSpec = func(rc ResourceContext, name string, appValue raw.Map) (spec raw.Map, err error) {
