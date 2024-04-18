@@ -2,6 +2,8 @@ package global
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -21,10 +23,37 @@ import (
 // The App field is tagged with `yaml:"app"` to specify the YAML name of the field.
 type Spec struct {
 	Asset struct {
-		Typ     string `yaml:"type"`
-		Release string `yaml:"release"`
-	} `yaml:"asset"`
-	App map[string]any `yaml:"app"`
+		Typ     string `yaml:"type" json:"type"`
+		Release string `yaml:"release" json:"release"`
+	} `yaml:"asset" json:"asset"`
+	App map[string]any `yaml:"app" json:"app"`
+}
+
+func SpecFromJSON(input any) (*Spec, error) {
+	var err error
+	var data []byte
+	switch v := input.(type) {
+	case []byte:
+		data = v
+	case string:
+		if data, err = os.ReadFile(v); err != nil {
+			return nil, err
+		}
+	case io.ReadCloser:
+		defer v.Close()
+		if data, err = io.ReadAll(v); err != nil {
+			return nil, err
+		}
+	default:
+		if data, err = json.Marshal(input); err != nil {
+			return nil, err
+		}
+	}
+	var spec Spec
+	if err = json.Unmarshal(data, &spec); err != nil {
+		return nil, err
+	}
+	return &spec, nil
 }
 
 func SpecFromYaml(input any) (*Spec, error) {
@@ -42,6 +71,8 @@ func SpecFromYaml(input any) (*Spec, error) {
 		if data, err = io.ReadAll(v); err != nil {
 			return nil, err
 		}
+	default:
+		return nil, fmt.Errorf("unsupported input type: %s", v)
 	}
 
 	var spec Spec
