@@ -134,7 +134,7 @@ func (r *Resource) Rollout(rc global.ResourceContext, options ...ResourceOption)
 // The ResourceOptions can be used to customize the uninstallation process.
 // If the wait duration is specified in the ResourceOptions, it will wait for the resource to be removed before returning.
 // It returns an error if the uninstallation fails.
-func (r *Resource) Uninstall(rc global.ResourceContext, options ...ResourceOption) error {
+func Uninstall(rc global.ResourceContext, name string, options ...ResourceOption) error {
 	ros := &resourceOptions{}
 	for _, option := range options {
 		option(ros)
@@ -143,5 +143,5 @@ func (r *Resource) Uninstall(rc global.ResourceContext, options ...ResourceOptio
 	if ros.wait > 0 {
 		oos = append(oos, operation.WithWait(ros.wait))
 	}
-	return operation.Remove(rc, r.Name, rc.Namespace(), oos...)
+	return operation.Remove(rc, name, rc.Namespace(), oos...)
 }
