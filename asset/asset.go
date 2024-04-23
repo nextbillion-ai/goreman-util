@@ -151,10 +151,15 @@ func New(rc global.AssetContext, typ, release string) (*Asset, error) {
 		if err = os.WriteFile(absPath, data, 0644); err != nil {
 			return
 		}
-		if a.schema, err = compiler.Compile("file://" + filepath.ToSlash(absPath)); err != nil {
-			return
-		}
+
 	}); err != nil {
+		return nil, err
+	}
+	var absPath string
+	if absPath, err = filepath.Abs(a.localPath + "/schema.json"); err != nil {
+		return nil, err
+	}
+	if a.schema, err = compiler.Compile("file://" + filepath.ToSlash(absPath)); err != nil {
 		return nil, err
 	}
 
@@ -165,7 +170,7 @@ func New(rc global.AssetContext, typ, release string) (*Asset, error) {
 // It returns an error if the schema is not initialized or if the validation fails.
 func (a *Asset) Validate(values map[string]any) error {
 	if a.schema == nil {
-		return fmt.Errorf("schema not initaizlied")
+		return fmt.Errorf("schema not initialized")
 	}
 	return a.schema.Validate(values)
 }
