@@ -123,7 +123,7 @@ func (p *PodGroup) onAvailable(pod *k8s.Pod) {
 		var ctx context.Context
 		ctx, pr.cancel = context.WithCancel(context.Background())
 		for range p.ccf(pod) {
-			pr.start(ctx)
+			go pr.start(ctx)
 		}
 	}
 	p.podRunners.Set(pod.Name, pr)
@@ -156,7 +156,7 @@ func (p *PodGroup) finalize() {
 	p.jobs.Finalize()
 }
 
-func (p *PodGroup) Alter(spec *global.Spec) error {
+func (p *PodGroup) Update(spec *global.Spec) error {
 	var err error
 	var res *resource.Resource
 	if res, err = resource.New(p.rc, p.name, spec); err != nil {
@@ -167,7 +167,7 @@ func (p *PodGroup) Alter(spec *global.Spec) error {
 
 type RunJob func(*k8s.Pod) error
 
-func (p *PodGroup) Schedule(jobs []RunJob) {
+func (p *PodGroup) Schedule(jobs ...RunJob) {
 	for _, j := range jobs {
 		p.jobs.In() <- &runJobWrapper{run: j, retryCount: 0, retryLimit: p.retry}
 	}
