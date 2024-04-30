@@ -31,10 +31,6 @@ type PodGroup struct {
 	min        uint
 }
 
-// CCF is a function to calculate concurrency a pod could reach
-// if CCF is not supplied when creating a PodGroup, it will default to a function that always return 1
-type CCF func(*k8s.Pod) uint
-
 type NewOption func(*PodGroup)
 
 func WithPodPattern(re *regexp.Regexp) NewOption {
