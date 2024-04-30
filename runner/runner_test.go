@@ -6,7 +6,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nextbillion-ai/goreman-util/global"
 	"github.com/stretchr/testify/assert"
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/safe"
@@ -41,8 +40,7 @@ func TestPodGroupHP(t *testing.T) {
 		return nil
 	}
 	expectedPodName := "testpod1"
-	rc := global.NewContext(context.Background())
-	pg := NewPodGroup(rc, "whocares")
+	pg := NewPodGroup(context.Background(), "whocares", "whocares")
 	pod := mockPod(t, expectedPodName)
 	pg.onAvailable(pod)
 	actualPodName := ""
@@ -68,8 +66,7 @@ func TestPodGroupRemove(t *testing.T) {
 	expectedPod2 := "testpod2"
 	pod1 := mockPod(t, expectedPod1)
 	pod2 := mockPod(t, expectedPod2)
-	rc := global.NewContext(context.Background())
-	pg := NewPodGroup(rc, "whocares")
+	pg := NewPodGroup(context.Background(), "whocares", "whocares")
 	pg.onAvailable(pod1)
 	pg.onAvailable(pod2)
 	go func() {
@@ -111,8 +108,7 @@ func TestPodGroupMoreJobLessPods(t *testing.T) {
 	expectedPod2 := "testpod2"
 	pod1 := mockPod(t, expectedPod1)
 	pod2 := mockPod(t, expectedPod2)
-	rc := global.NewContext(context.Background())
-	pg := NewPodGroup(rc, "whocares")
+	pg := NewPodGroup(context.Background(), "whocares", "whocares")
 	pg.onAvailable(pod1)
 	pg.onAvailable(pod2)
 	var wg sync.WaitGroup
@@ -151,8 +147,7 @@ func TestPodGroupRetry(t *testing.T) {
 	expectedPod2 := "testpod2"
 	pod1 := mockPod(t, expectedPod1)
 	pod2 := mockPod(t, expectedPod2)
-	rc := global.NewContext(context.Background())
-	pg := NewPodGroup(rc, "whocares", WithRetry(3))
+	pg := NewPodGroup(context.Background(), "whocares", "whocares", WithRetry(3))
 	pg.onAvailable(pod1)
 	pg.onAvailable(pod2)
 	var wg sync.WaitGroup
