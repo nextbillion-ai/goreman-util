@@ -37,6 +37,10 @@ type FastScaling struct {
 	events   *safe.UnlimitedChannel[*event]
 }
 
+// NewFastScaling creates a new instance of the FastScaling strategy.
+// It takes a context, a scaler function, maximum and minimum values for scaling,
+// and the number of pods to be created or destroyed at each scaling event.
+// It returns a pointer to the created FastScaling instance.
 func NewFastScaling(ctx context.Context, scaler func(uint), max, min uint, podCC uint) *FastScaling {
 	s := &FastScaling{
 		ctx:    ctx,
@@ -103,6 +107,7 @@ outer:
 
 }
 
+// EventReceiver returns a channel that can be used to receive events.
 func (f *FastScaling) EventReceiver() chan *event {
 	return f.events.In()
 }
