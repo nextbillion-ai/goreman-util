@@ -56,6 +56,49 @@ func TestPodGroupHP(t *testing.T) {
 	assert.Equal(t, expectedPodName, actualPodName)
 }
 
+func TestPodGroupRemove(t *testing.T) {
+	var orgK8sWatch = k8sWatch
+	defer func() {
+		k8sWatch = orgK8sWatch
+	}()
+	k8sWatch = func(_ context.Context, _ string, _ ...k8s.WatchOption) error {
+		return nil
+	}
+	expectedPod1 := "testpod1"
+	expectedPod2 := "testpod2"
+	pod1 := mockPod(t, expectedPod1)
+	pod2 := mockPod(t, expectedPod2)
+	rc := global.NewContext(context.Background())
+	pg := NewPodGroup(rc, "whocares")
+	pg.onAvailable(pod1)
+	pg.onAvailable(pod2)
+	go func() {
+		pg.onUnavaiable(pod2)
+	}()
+	var wg sync.WaitGroup
+	count := 0
+	podMap := safe.NewMap[string, int]()
+	podMap.Set(expectedPod1, 0)
+	podMap.Set(expectedPod2, 0)
+	fs := []RunJob{}
+	for range 10 {
+		wg.Add(1)
+		fs = append(fs, func(pod *k8s.Pod) error {
+			defer wg.Done()
+			count++
+			p, _ := podMap.Get(pod.Name)
+			podMap.Set(pod.Name, p+1)
+			return nil
+		})
+	}
+	pg.Schedule(fs...)
+	wg.Wait()
+	assert.Equal(t, 10, count)
+	p1, _ := podMap.Get(expectedPod1)
+	p2, _ := podMap.Get(expectedPod2)
+	assert.Equal(t, 10, p1+p2)
+}
+
 func TestPodGroupMoreJobLessPods(t *testing.T) {
 	var orgK8sWatch = k8sWatch
 	defer func() {
