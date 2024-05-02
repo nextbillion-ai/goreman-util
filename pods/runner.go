@@ -141,12 +141,21 @@ func (rc *runnerCollection) onRemove(pod *k8s.Pod) {
 		}
 	}
 	func() {
+		//shrink index and holes where possible
 		rc.Lock()
 		defer rc.Unlock()
 		if index == rc.index {
 			rc.index--
 		} else if index < rc.index {
 			rc.holes[index] = struct{}{}
+		}
+		for {
+			if _, exists := rc.holes[rc.index]; exists {
+				delete(rc.holes, rc.index)
+				rc.index--
+				continue
+			}
+			break
 		}
 	}()
 }
