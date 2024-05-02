@@ -3,6 +3,7 @@ module github.com/nextbillion-ai/goreman-util
 go 1.22.1
 
 require (
+	github.com/elliotchance/orderedmap/v2 v2.2.0
 	github.com/nextbillion-ai/gsg v1.0.12
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/sirupsen/logrus v1.9.3
@@ -62,7 +63,6 @@ require (
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-metrics v0.0.1 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
-	github.com/elliotchance/orderedmap/v2 v2.2.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/evanphx/json-patch v5.7.0+incompatible // indirect
 	github.com/exponent-io/jsonpath v0.0.0-20151013193312-d6023ce2651d // indirect
