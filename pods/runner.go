@@ -10,15 +10,12 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/zhchang/goquiver/k8s"
-	"github.com/zhchang/goquiver/safe"
 )
 
 type runnerCollection struct {
 	sync.RWMutex
 	name        string
-	runners     *safe.Map[string, *runner]
-	holes       map[int]struct{}
-	index       int
+	runners     *orderedCollection[*runner]
 	extractor   *regexp.Regexp
 	incoming    <-chan *jobWrapper
 	requeue     func(*jobWrapper)
@@ -37,11 +34,10 @@ func newRunnerCollection(name string, min, max, podCC int, idleTimeout time.Dura
 		min:         min,
 		max:         max,
 		podCC:       podCC,
-		runners:     safe.NewMap[string, *runner](),
+		runners:     newOrderedCollection[*runner](),
 		extractor:   regexp.MustCompile(name + `-(\d+)-.*`),
 		incoming:    incoming,
 		operator:    operator,
-		holes:       map[int]struct{}{},
 		idleTimeout: idleTimeout,
 	}
 	rc.requeue = func(jw *jobWrapper) {
@@ -88,10 +84,9 @@ func (rc *runnerCollection) onAdd(pod *k8s.Pod) {
 		logrus.Warnf("runnerCollection %s onAdd triggered by pod: %s resulted in index extraction failure: %s, this should not happen", rc.name, err, pod.Name)
 		return
 	}
-	runnerName := genRunnerName(rc.name, index)
 	var exists bool
 	var r *runner
-	if r, exists = rc.runners.Get(runnerName); exists {
+	if r, exists = rc.runners.get(index); exists {
 		switch r.state {
 		case stopping:
 			r = nil
@@ -106,21 +101,12 @@ func (rc *runnerCollection) onAdd(pod *k8s.Pod) {
 		}
 	}
 	if r == nil {
-		r = rc.newRunner(runnerName, running)
+		r = rc.newRunner(running)
+		r.index = index
 		var ctx context.Context
 		ctx, r.cancel = context.WithCancel(context.Background())
 		go r.start(ctx, rc.podCC, rc.idleTimeout)
-		func() {
-			rc.Lock()
-			defer rc.Unlock()
-			rc.runners.Set(runnerName, r)
-			if index > rc.index {
-				for i := rc.index; i < index; i++ {
-					rc.holes[i] = struct{}{}
-				}
-				rc.index = index
-			}
-		}()
+		rc.runners.set(index, r)
 	}
 }
 
@@ -131,49 +117,25 @@ func (rc *runnerCollection) onRemove(pod *k8s.Pod) {
 		logrus.Warnf("runnerCollection %s onRemove triggered by pod: %s resulted in index extraction failure: %s, this should not happen", rc.name, err, pod.Name)
 		return
 	}
-	runnerName := genRunnerName(rc.name, index)
 	var exists bool
 	var r *runner
-	if r, exists = rc.runners.Get(runnerName); exists {
+	if r, exists = rc.runners.get(index); exists {
 		switch r.state {
 		case stopping:
-			rc.runners.Delete(runnerName)
 		case scheduled:
-			rc.runners.Delete(runnerName)
 		case running:
 			r.state = running
 			r.cancel()
-			rc.runners.Delete(runnerName)
 		}
 	}
 	if exists {
-		func() {
-			//shrink index and holes where possible
-			rc.Lock()
-			defer rc.Unlock()
-			if index == rc.index {
-				rc.index--
-			} else if index < rc.index {
-				rc.holes[index] = struct{}{}
-			}
-			for {
-				if _, exists := rc.holes[rc.index]; exists {
-					delete(rc.holes, rc.index)
-					rc.index--
-					continue
-				}
-				break
-			}
-		}()
+		rc.runners.delete(index)
 	}
 }
 
-func (rc *runnerCollection) newRunner(name string, state runnerState) *runner {
-	if state == scheduled {
-		rc.operator.SpinUp(name)
-	}
+func (rc *runnerCollection) newRunner(state runnerState) *runner {
 	return &runner{
-		name:         name,
+		name:         rc.name,
 		state:        state,
 		incoming:     rc.incoming,
 		requeue:      rc.requeue,
@@ -194,18 +156,7 @@ func (rc *runnerCollection) schedule(count int) {
 		runnersNeeded++
 	}
 	for range runnersNeeded {
-		if len(rc.holes) > 0 {
-			for k := range rc.holes {
-				runnerName := genRunnerName(rc.name, k)
-				rc.runners.Set(runnerName, rc.newRunner(runnerName, scheduled))
-				delete(rc.holes, k)
-				break
-			}
-			continue
-		}
-		rc.index++
-		runnerName := genRunnerName(rc.name, rc.index)
-		rc.runners.Set(runnerName, rc.newRunner(runnerName, scheduled))
+		rc.runners.fill(rc.newRunner(scheduled))
 	}
 }
 
@@ -219,6 +170,7 @@ const (
 
 type runner struct {
 	name         string
+	index        int
 	soft         bool
 	pod          *k8s.Pod
 	state        runnerState
@@ -229,6 +181,13 @@ type runner struct {
 	beforeJobRun func()
 	afterJobRun  func()
 	onJobFinish  func()
+}
+
+func (r *runner) SetIndex(index int) {
+	r.index = index
+	if r.state == scheduled {
+		go r.operator.SpinUp(genRunnerName(r.name, r.index))
+	}
 }
 
 func (r *runner) start(ctx context.Context, count int, idleTimeout time.Duration) {
@@ -251,7 +210,7 @@ outter:
 		idleTicker.Stop()
 	}
 	r.state = stopping
-	r.operator.TearDown(r.name, r.soft)
+	go r.operator.TearDown(genRunnerName(r.name, r.index), r.soft)
 }
 
 func (r *runner) run(ctx context.Context, busy chan struct{}) {

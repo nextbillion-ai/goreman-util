@@ -67,7 +67,7 @@ func TestGroupIdle(t *testing.T) {
 	g.Schedule(fs...)
 	wg.Wait()
 	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, 0, g.runners.index)
+	assert.Equal(t, 0, g.runners.runners.index)
 }
 
 func TestGroupReschedule(t *testing.T) {
@@ -110,12 +110,11 @@ func TestGroupReschedule(t *testing.T) {
 	g.Schedule(fs...)
 	go func() {
 		time.Sleep(5 * time.Millisecond)
-		keys := g.runners.runners.Keys()
-		for _, key := range keys {
-			if r, exists := g.runners.runners.Get(key); exists {
-				if r.cancel != nil {
-					r.cancel()
-				}
+		g.runners.runners.Lock()
+		defer g.runners.runners.Unlock()
+		for _, r := range g.runners.runners.m {
+			if r.cancel != nil {
+				r.cancel()
 			}
 		}
 	}()
