@@ -21,7 +21,7 @@ type runnerCollection struct {
 	index       int
 	extractor   *regexp.Regexp
 	incoming    <-chan *jobWrapper
-	requeue     chan *jobWrapper
+	requeue     func(*jobWrapper)
 	operator    Operator
 	min         int
 	max         int
@@ -32,7 +32,7 @@ type runnerCollection struct {
 }
 
 func newRunnerCollection(name string, min, max, podCC int, idleTimeout time.Duration, incoming <-chan *jobWrapper, requeue chan *jobWrapper, operator Operator) *runnerCollection {
-	return &runnerCollection{
+	rc := &runnerCollection{
 		name:        name,
 		min:         min,
 		max:         max,
@@ -40,11 +40,15 @@ func newRunnerCollection(name string, min, max, podCC int, idleTimeout time.Dura
 		runners:     safe.NewMap[string, *runner](),
 		extractor:   regexp.MustCompile(name + `-(\d+)-.*`),
 		incoming:    incoming,
-		requeue:     requeue,
 		operator:    operator,
 		holes:       map[int]struct{}{},
 		idleTimeout: idleTimeout,
 	}
+	rc.requeue = func(jw *jobWrapper) {
+		requeue <- jw
+		rc.schedule(1)
+	}
+	return rc
 }
 
 func (rc *runnerCollection) onJobFinish() {
@@ -142,24 +146,26 @@ func (rc *runnerCollection) onRemove(pod *k8s.Pod) {
 			rc.runners.Delete(runnerName)
 		}
 	}
-	func() {
-		//shrink index and holes where possible
-		rc.Lock()
-		defer rc.Unlock()
-		if index == rc.index {
-			rc.index--
-		} else if index < rc.index {
-			rc.holes[index] = struct{}{}
-		}
-		for {
-			if _, exists := rc.holes[rc.index]; exists {
-				delete(rc.holes, rc.index)
+	if exists {
+		func() {
+			//shrink index and holes where possible
+			rc.Lock()
+			defer rc.Unlock()
+			if index == rc.index {
 				rc.index--
-				continue
+			} else if index < rc.index {
+				rc.holes[index] = struct{}{}
 			}
-			break
-		}
-	}()
+			for {
+				if _, exists := rc.holes[rc.index]; exists {
+					delete(rc.holes, rc.index)
+					rc.index--
+					continue
+				}
+				break
+			}
+		}()
+	}
 }
 
 func (rc *runnerCollection) newRunner(name string, state runnerState) *runner {
@@ -217,7 +223,7 @@ type runner struct {
 	pod          *k8s.Pod
 	state        runnerState
 	incoming     <-chan *jobWrapper
-	requeue      chan *jobWrapper
+	requeue      func(*jobWrapper)
 	cancel       func()
 	operator     Operator
 	beforeJobRun func()
@@ -271,7 +277,7 @@ outter:
 				}(); err != nil {
 					if rjw.retryCount < rjw.retryLimit {
 						rjw.retryCount++
-						r.requeue <- rjw
+						r.requeue(rjw)
 						continue
 					}
 				}
