@@ -1,4 +1,4 @@
-package runner
+package pods
 
 import (
 	"context"
@@ -54,6 +54,9 @@ func NewFastScaling(ctx context.Context, scaler func(uint), max, min uint, podCC
 	return s
 }
 
+// TODO: job might be disturbed by scaling in. perhaps we should kill pods who has been idle for a while.
+// TODO: job might be lost when pod scaled in. Job won't be lost but will fail.
+// TODO: handle dangling pod groups resulted from restarting/rolling update
 func (f *FastScaling) doScale() {
 	podsNeeded := f.jobCount / f.podCC
 	if f.jobCount%f.podCC > 0 {
