@@ -15,33 +15,35 @@ import (
 
 type runnerCollection struct {
 	sync.RWMutex
-	name       string
-	runners    *safe.Map[string, *runner]
-	holes      map[int]struct{}
-	index      int
-	extractor  *regexp.Regexp
-	incoming   <-chan *jobWrapper
-	requeue    chan *jobWrapper
-	operator   Operator
-	min        int
-	max        int
-	podCC      int
-	jobCount   int
-	jobRunning int
+	name        string
+	runners     *safe.Map[string, *runner]
+	holes       map[int]struct{}
+	index       int
+	extractor   *regexp.Regexp
+	incoming    <-chan *jobWrapper
+	requeue     chan *jobWrapper
+	operator    Operator
+	min         int
+	max         int
+	podCC       int
+	jobCount    int
+	jobRunning  int
+	idleTimeout time.Duration
 }
 
-func newRunnerCollection(name string, min, max, podCC int, incoming <-chan *jobWrapper, requeue chan *jobWrapper, operator Operator) *runnerCollection {
+func newRunnerCollection(name string, min, max, podCC int, idleTimeout time.Duration, incoming <-chan *jobWrapper, requeue chan *jobWrapper, operator Operator) *runnerCollection {
 	return &runnerCollection{
-		name:      name,
-		min:       min,
-		max:       max,
-		podCC:     podCC,
-		runners:   safe.NewMap[string, *runner](),
-		extractor: regexp.MustCompile(name + `-(\d+)-.*`),
-		incoming:  incoming,
-		requeue:   requeue,
-		operator:  operator,
-		holes:     map[int]struct{}{},
+		name:        name,
+		min:         min,
+		max:         max,
+		podCC:       podCC,
+		runners:     safe.NewMap[string, *runner](),
+		extractor:   regexp.MustCompile(name + `-(\d+)-.*`),
+		incoming:    incoming,
+		requeue:     requeue,
+		operator:    operator,
+		holes:       map[int]struct{}{},
+		idleTimeout: idleTimeout,
 	}
 }
 
@@ -93,7 +95,7 @@ func (rc *runnerCollection) onAdd(pod *k8s.Pod) {
 			r.state = running
 			var ctx context.Context
 			ctx, r.cancel = context.WithCancel(context.Background())
-			go r.start(ctx, rc.podCC)
+			go r.start(ctx, rc.podCC, rc.idleTimeout)
 		case running:
 			logrus.Warnf("runnerCollection %s onAdd triggered by pod: %s when runner is already running, this should not happen", rc.name, pod.Name)
 			return
@@ -103,7 +105,7 @@ func (rc *runnerCollection) onAdd(pod *k8s.Pod) {
 		r = rc.newRunner(runnerName, running)
 		var ctx context.Context
 		ctx, r.cancel = context.WithCancel(context.Background())
-		go r.start(ctx, rc.podCC)
+		go r.start(ctx, rc.podCC, rc.idleTimeout)
 		func() {
 			rc.Lock()
 			defer rc.Unlock()
@@ -161,6 +163,9 @@ func (rc *runnerCollection) onRemove(pod *k8s.Pod) {
 }
 
 func (rc *runnerCollection) newRunner(name string, state runnerState) *runner {
+	if state == scheduled {
+		rc.operator.SpinUp(name)
+	}
 	return &runner{
 		name:         name,
 		state:        state,
@@ -220,7 +225,7 @@ type runner struct {
 	onJobFinish  func()
 }
 
-func (r *runner) start(ctx context.Context, count int) {
+func (r *runner) start(ctx context.Context, count int, idleTimeout time.Duration) {
 	r.state = running
 	busy := make(chan struct{})
 	for range count {
@@ -228,15 +233,16 @@ func (r *runner) start(ctx context.Context, count int) {
 	}
 outter:
 	for {
-		idleTimeout := time.NewTicker(10 * time.Second)
+		idleTicker := time.NewTicker(idleTimeout)
 		select {
 		case <-ctx.Done():
 			break outter
-		case <-idleTimeout.C:
+		case <-idleTicker.C:
 			r.cancel()
 			break outter
 		case <-busy:
 		}
+		idleTicker.Stop()
 	}
 	r.state = stopping
 	r.operator.TearDown(r.name, r.soft)

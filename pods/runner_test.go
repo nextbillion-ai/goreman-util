@@ -7,8 +7,7 @@ import (
 )
 
 func TestExtractIndex(t *testing.T) {
-
-	rc := newRunnerCollection("test", 0, 0, 0, nil, nil, nil)
+	rc := newRunnerCollection("test", 0, 0, 0, 0, nil, nil, nil)
 	i1, e1 := rc.extractIndex("test-1-whocares")
 	assert.Nil(t, e1)
 	assert.Equal(t, 1, i1)

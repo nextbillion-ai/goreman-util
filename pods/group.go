@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"time"
 
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/safe"
@@ -18,15 +19,16 @@ type jobWrapper struct {
 }
 
 type Group struct {
-	ctx      context.Context
-	name     string
-	operator Operator
-	podCC    int
-	retry    int
-	jobs     *safe.UnlimitedChannel[*jobWrapper]
-	runners  *runnerCollection
-	max      int
-	min      int
+	ctx         context.Context
+	name        string
+	operator    Operator
+	podCC       int
+	retry       int
+	jobs        *safe.UnlimitedChannel[*jobWrapper]
+	runners     *runnerCollection
+	max         int
+	min         int
+	idleTimeout time.Duration
 }
 
 type NewOption func(*Group)
@@ -60,6 +62,12 @@ func WithMax(value int) NewOption {
 func WithMin(value int) NewOption {
 	return func(g *Group) {
 		g.min = value
+	}
+}
+
+func WithIdleTimeout(value time.Duration) NewOption {
+	return func(g *Group) {
+		g.idleTimeout = value
 	}
 }
 
@@ -103,10 +111,13 @@ func NewGroup(ctx context.Context, name string, operator Operator, options ...Ne
 	for _, option := range options {
 		option(g)
 	}
-	g.runners = newRunnerCollection(name, g.min, g.max, g.podCC, g.jobs.Out(), g.jobs.In(), g.operator)
 	if g.podCC == 0 {
 		g.podCC = 1
 	}
+	if g.idleTimeout == 0 {
+		g.idleTimeout = 10 * time.Second
+	}
+	g.runners = newRunnerCollection(name, g.min, g.max, g.podCC, g.idleTimeout, g.jobs.Out(), g.jobs.In(), g.operator)
 
 	go operator.Watch(regexp.MustCompile(``), g.runners.onAdd, g.runners.onRemove)
 	go g.finalize()
