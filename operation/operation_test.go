@@ -107,7 +107,7 @@ spec:
 			"template": "whocares",
 		},
 	}
-	should := shouldRotate(df, sts)
+	should := shouldRotate(global.NewContext(context.Background()), df, sts)
 	assert.False(t, should)
 }
 
@@ -136,7 +136,7 @@ spec:
 			"template": "whocares",
 		},
 	}
-	should := shouldRotate(df, sts)
+	should := shouldRotate(global.NewContext(context.Background()), df, sts)
 	assert.True(t, should)
 }
 
@@ -248,4 +248,33 @@ spec:
 	}
 	assert.False(t, rotated)
 	assert.Equal(t, "sts1---2", new.GetName())
+}
+
+func TestShouldRotateRegex(t *testing.T) {
+	assert.False(t, stsRotationRegex.MatchString("mdm-pd-singapore-o6-1119503774d"))
+	assert.True(t, stsRotationRegex.MatchString("mdm-pd-singapore-o6-1119503774d---0"))
+}
+
+func TestRenameStsIfNeeded(t *testing.T) {
+	var stsYaml = `
+kind: StatefulSet
+metadata:
+  name: sts1
+spec:
+  replicas: 2 
+  template:
+    spec:
+      containers:
+      - image: whocares`
+	var err error
+	var r k8s.Resource
+	if r, err = k8s.DecodeYAML(stsYaml); err != nil {
+		panic(err)
+	}
+	list := []k8s.Resource{r}
+	nameMap := map[string]string{}
+	renameStss(list, nameMap)
+	r = list[0]
+	assert.Equal(t, "sts1---0", r.GetName())
+	assert.Equal(t, "sts1---0", nameMap["sts1"])
 }
