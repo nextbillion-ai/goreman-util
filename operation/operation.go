@@ -102,7 +102,7 @@ var rotatekeys = map[string]struct{}{
 	"updateStrategy": {},
 }
 
-func shouldRotate(df raw.Map, sts *k8s.StatefulSet) bool {
+func shouldRotate(rc global.ResourceContext, df raw.Map, sts *k8s.StatefulSet) bool {
 	if len(df) == 0 {
 		return false
 	}
@@ -122,16 +122,19 @@ func shouldRotate(df raw.Map, sts *k8s.StatefulSet) bool {
 		if len(specChanges) == 1 && specChanges[0] == "replicas" {
 			return false
 		}
+		rc.Logger().Debugf("[rotate reason] spec changes with 1 replica sts: %+v", specChanges)
 		return true
 	}
 	for _, key := range specChanges {
 		if _, ok := rotatekeys[key]; !ok {
+			rc.Logger().Debugf("[rotate reason] must rotate spec change: %+v", key)
 			return true
 		}
 	}
 	var templateMap raw.Map
 	if templateMap, err = raw.ChainGet[raw.Map](df, "spec", "template"); err == nil {
 		if _, ok := templateMap["labels"]; ok {
+			rc.Logger().Debugf("[rotate reason] spec template labels changed")
 			return true
 		}
 	}
@@ -205,7 +208,7 @@ func rotateSts(rc global.ResourceContext, old k8s.Resource, new *k8s.Resource, t
 	if sts, err = k8s.Parse[*k8s.StatefulSet](old); err != nil {
 		return
 	}
-	sr := len(df) > 0 && shouldRotate(df, sts)
+	sr := len(df) > 0 && shouldRotate(rc, df, sts)
 	rc.Logger().Infof("trying to rotate manifest for %s/%s", sts.GetNamespace(), sts.GetName())
 	var current = getCurrentRotation(rc.Context(), sts)
 	if current != nil {
@@ -339,16 +342,16 @@ func writeManifest(ctx context.Context, value, name, namespace string) error {
 	return k8s.Rollout(ctx, &manifest)
 }
 
-func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (err error) {
-	stsNameToRealName := map[string]string{}
-	for _, r := range new {
+func renameStss(list []k8s.Resource, stsNameToRealName map[string]string) {
+	for index, r := range list {
 		kind := r.GetObjectKind().GroupVersionKind().Kind
 		if kind == k8s.KindStatefulSet {
-			var sts *k8s.StatefulSet
-			sts, _ = k8s.Parse[*k8s.StatefulSet](r)
+			//var sts *k8s.StatefulSet
+			sts, _ := k8s.Parse[*k8s.StatefulSet](r)
 			if !stsRotationRegex.MatchString(r.GetName()) && shouldRename(sts) {
 				org := sts.GetName()
 				sts.ObjectMeta.Name += "---0"
+				list[index] = sts
 				stsNameToRealName[org] = sts.ObjectMeta.Name
 			} else {
 				org := getLabel(&sts.ObjectMeta, "app.kubernetes.io/name")
@@ -356,6 +359,11 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 			}
 		}
 	}
+}
+
+func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (err error) {
+	stsNameToRealName := map[string]string{}
+	renameStss(new, stsNameToRealName)
 
 	for _, r := range new {
 		kind := r.GetObjectKind().GroupVersionKind().Kind
