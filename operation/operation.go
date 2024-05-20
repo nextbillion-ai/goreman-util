@@ -32,7 +32,7 @@ func resourceKey(kind, name string) string {
 	return kind + name
 }
 
-func getExistingManifest(ctx context.Context, name, namespace string) (existing []k8s.Resource, err error) {
+var getExistingManifest = func(ctx context.Context, name, namespace string) (existing []k8s.Resource, err error) {
 	var _t []k8s.Resource
 	var cfg *k8s.ConfigMap
 	if cfg, err = k8s.Get[*k8s.ConfigMap](ctx, name+"-manifest", namespace); err != nil {
@@ -160,10 +160,10 @@ func extractRotation(name string) (rotation int, err error) {
 	return
 }
 
-var getCurrentRotation = func(ctx context.Context, sts *k8s.StatefulSet) *currentRotations {
+var getCurrentRotation = func(ctx context.Context, name, namespace string) *currentRotations {
 	var stss []*k8s.StatefulSet
 	var err error
-	if stss, err = k8s.List[*k8s.StatefulSet](ctx, sts.GetNamespace(), k8s.WithRegex(regexp.MustCompile(fmt.Sprintf(`%s---\d+`, sts.GetName())))); err != nil {
+	if stss, err = k8s.List[*k8s.StatefulSet](ctx, namespace, k8s.WithRegex(regexp.MustCompile(fmt.Sprintf(`%s---\d+`, name)))); err != nil {
 		return nil
 	}
 	if len(stss) == 0 {
@@ -210,7 +210,7 @@ func rotateSts(rc global.ResourceContext, old k8s.Resource, new *k8s.Resource, t
 	}
 	sr := len(df) > 0 && shouldRotate(rc, df, sts)
 	rc.Logger().Infof("trying to rotate manifest for %s/%s", sts.GetNamespace(), sts.GetName())
-	var current = getCurrentRotation(rc.Context(), sts)
+	var current = getCurrentRotation(rc.Context(), sts.Name, rc.Namespace())
 	if current != nil {
 		rc.Logger().Infof(`current rotation for %s/%s is %d`, sts.GetNamespace(), sts.GetName(), current.rotation)
 	}
@@ -327,7 +327,7 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	if err = apply(rc, new, toRemoves, opts.wait, changed); err != nil {
 		return err
 	}
-	return writeManifest(rc.Context(), newStr, new[0].GetName(), new[0].GetNamespace())
+	return writeManifest(rc.Context(), newStr, new[0].GetName(), rc.Namespace())
 }
 
 func writeManifest(ctx context.Context, value, name, namespace string) error {
@@ -402,6 +402,10 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 	return
 }
 
+var doRemove = func(ctx context.Context, name, namespace string, kind k8s.Kind, options ...k8s.OperationOption) error {
+	return k8s.Remove(ctx, name, namespace, kind, options...)
+}
+
 // Remove removes a resource from a given namespace.
 // It takes a resource context, the name and namespace of the resource to be removed,
 // and optional operation options.
@@ -417,11 +421,25 @@ func Remove(rc global.ResourceContext, name, namespace string, options ...Operat
 		return err
 	}
 	for _, r := range old {
-		if err = k8s.Remove(rc.Context(), r.GetName(), r.GetNamespace(), r.GetObjectKind().GroupVersionKind().Kind, k8s.WithWait(opts.wait)); err != nil {
-			rc.Logger().Warnf("failed to remove %s-%s/%s: %s", r.GetObjectKind().GroupVersionKind().Kind, r.GetNamespace(), r.GetName(), err)
+
+		kind := r.GetObjectKind().GroupVersionKind().Kind
+		switch kind {
+		case k8s.KindStatefulSet:
+			var current = getCurrentRotation(rc.Context(), r.GetName(), rc.Namespace())
+			if current != nil {
+				if err = doRemove(rc.Context(), fmt.Sprintf("%s---%d", r.GetName(), current.rotation), r.GetNamespace(), k8s.KindStatefulSet, k8s.WithWait(opts.wait)); err != nil {
+					rc.Logger().Warnf("failed to remove %s-%s/%s: %s", k8s.KindStatefulSet, rc.Namespace(), r.GetName(), err)
+				}
+			} else {
+				rc.Logger().Warnf(`current rotation not found for %s/%s`, rc.Namespace(), r.GetName())
+			}
+		default:
+			if err = doRemove(rc.Context(), r.GetName(), r.GetNamespace(), r.GetObjectKind().GroupVersionKind().Kind, k8s.WithWait(opts.wait)); err != nil {
+				rc.Logger().Warnf("failed to remove %s-%s/%s: %s", r.GetObjectKind().GroupVersionKind().Kind, r.GetNamespace(), r.GetName(), err)
+			}
 		}
 	}
-	if err = k8s.Remove(rc.Context(), name+"-manifest", namespace, k8s.KindConfigMap, k8s.WithWait(opts.wait)); err != nil {
+	if err = doRemove(rc.Context(), name+"-manifest", namespace, k8s.KindConfigMap, k8s.WithWait(opts.wait)); err != nil {
 		return err
 	}
 	return nil
