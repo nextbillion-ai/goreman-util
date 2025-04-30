@@ -30,7 +30,7 @@ var _gcsCacheOnce sync.Once
 
 var readGCSYaml = func(url string) (values raw.Map, err error) {
 	_gcsCacheOnce.Do(func() {
-		gcsCache = cache.New[string, raw.Map](cache.WithRefreshInterval(30 * time.Minute))
+		gcsCache = cache.New[string, raw.Map](cache.WithRefreshInterval(1 * time.Minute))
 	})
 	if values, err = gcsCache.Get(url, cache.WithStale[raw.Map](), cache.WithTTL[raw.Map](1*time.Hour), cache.WithRefresher[raw.Map](func() (raw.Map, error) {
 		var err error
