@@ -32,7 +32,7 @@ var readGCSYaml = func(url string) (values raw.Map, err error) {
 	_gcsCacheOnce.Do(func() {
 		gcsCache = cache.New[string, raw.Map](cache.WithRefreshInterval(1 * time.Minute))
 	})
-	if values, err = gcsCache.Get(url, cache.WithStale[raw.Map](), cache.WithTTL[raw.Map](1*time.Hour), cache.WithRefresher[raw.Map](func() (raw.Map, error) {
+	if values, err = gcsCache.Get(url, cache.WithStale[raw.Map](), cache.WithTTL[raw.Map](1*time.Minute), cache.WithRefresher[raw.Map](func() (raw.Map, error) {
 		var err error
 		var o *object.Object
 		if o, err = object.New(url); err != nil {
