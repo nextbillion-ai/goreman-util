@@ -99,6 +99,25 @@ var MustHaveOptions = func() *Options {
 	return _globalOptions
 }
 
+// Init initializes global options with provided parameters directly
+func Init(cluster, basepath, clusterConfPath string) (err error) {
+	globalOptionsOnce.Do(func() {
+		_globalOptions = &Options{
+			Cluster:  cluster,
+			Basepath: basepath,
+		}
+
+		var _that raw.Map
+		if _that, err = readGCSYaml(clusterConfPath); err != nil {
+			return
+		}
+		if _globalOptions.Values, err = raw.Get[map[string]any](_that, "global"); err != nil {
+			return
+		}
+	})
+	return
+}
+
 func InitFromConfigMap(name, namespace string) (err error) {
 	globalOptionsOnce.Do(func() {
 		_globalOptions = &Options{}
