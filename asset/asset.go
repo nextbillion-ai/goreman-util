@@ -23,6 +23,7 @@ import (
 	"github.com/nextbillion-ai/goreman-util/global"
 	"github.com/nextbillion-ai/gsg/lib/object"
 	"github.com/santhosh-tekuri/jsonschema/v5"
+	"github.com/sirupsen/logrus"
 	"github.com/zhchang/goquiver/safe"
 )
 
@@ -100,6 +101,7 @@ func New(rc global.AssetContext, typ, release string) (*Asset, error) {
 	a.localPath = fmt.Sprintf("%s/%s/%s", wp, typ, release)
 	a.url = fmt.Sprintf("%s/assets/%s/releases/%s", global.MustHaveOptions().Basepath, typ, release)
 	a.id = a.typ + "-" + a.release
+	logrus.Infof("asset id: %s, url: %s", a.id, a.url)
 	var once sync.Once
 	loaderCache.SetIfNotExists(a.id, &once)
 	loader, _ := loaderCache.Get(a.id)
