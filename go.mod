@@ -3,7 +3,7 @@ module github.com/nextbillion-ai/goreman-util
 go 1.22.1
 
 require (
-	github.com/nextbillion-ai/gsg v1.0.28
+	github.com/nextbillion-ai/gsg v1.0.29
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
