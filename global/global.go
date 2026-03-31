@@ -65,22 +65,23 @@ var GlobalSpec = func(rc ResourceContext, name string, appValue raw.Map) (spec r
 			rc.Logger().Warnf("plugin %s not loaded because its name/url/keys are empty", plugin.Name)
 			continue
 		}
-		plugin.Url = strings.ReplaceAll(plugin.Url, `{cluster}`, _globalOptions.Cluster)
-		plugin.Url = strings.ReplaceAll(plugin.Url, `{namespace}`, rc.Namespace())
-		plugin.Url = strings.ReplaceAll(plugin.Url, `{name}`, name)
+		url := plugin.Url
+		url = strings.ReplaceAll(url, `{cluster}`, _globalOptions.Cluster)
+		url = strings.ReplaceAll(url, `{namespace}`, rc.Namespace())
+		url = strings.ReplaceAll(url, `{name}`, name)
 		for _, item := range []string{"area", "mode", "context"} {
-			if strings.Contains(plugin.Url, item) {
+			if strings.Contains(url, "{"+item+"}") {
 				var value string
 				if value, err = raw.Get[string](appValue, item); err != nil {
 					rc.Logger().Warnf("plugin failed to load: %s not found in app values", item)
 					return
 				}
-				plugin.Url = strings.ReplaceAll(plugin.Url, "{"+item+"}", value)
+				url = strings.ReplaceAll(url, "{"+item+"}", value)
 			}
 
 		}
 		var values raw.Map
-		if values, err = readGCSYaml(plugin.Url); err != nil {
+		if values, err = readGCSYaml(url); err != nil {
 			return
 		}
 		object := raw.Map{}
