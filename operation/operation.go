@@ -294,9 +294,14 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	if len(new) == 0 {
 		return fmt.Errorf("nothing to rollout")
 	}
-	// Captured before apply, which renames StatefulSet entries in place. Reads of the
-	// manifest are keyed by the release name, so the record must be too.
-	manifestName := new[0].GetName()
+	// The release name, which is what getExistingManifest and Remove key their reads by.
+	// new[0].GetName() is not a safe substitute: helm does not guarantee the first
+	// rendered object is named exactly global.name, and a chart whose first resource is
+	// e.g. "<release>-sa" would have its manifest written somewhere nothing looks.
+	var manifestName string
+	if manifestName, err = raw.ChainGet[string](values, "global", "name"); err != nil {
+		return err
+	}
 
 	var toRemoves []toRemove
 	var changed = map[string]bool{}
@@ -417,6 +422,16 @@ func recordPartialManifest(rc global.ResourceContext, old, applied []k8s.Resourc
 		rc.Logger().Warnf("failed to encode partial manifest for %s/%s: %s", rc.Namespace(), name, err)
 		return
 	}
+	// DecodeAllYAML splits on the substring "---", so a resource carrying one in its
+	// content - a PEM block, an embedded manifest - does not survive the round trip.
+	// Never replace a readable manifest with one that cannot be read back: uninstall
+	// would then fail to decode it and delete nothing at all.
+	var decoded []k8s.Resource
+	if decoded, err = k8s.DecodeAllYAML(value); err != nil || len(decoded) != len(merged) {
+		rc.Logger().Warnf("partial manifest for %s/%s does not round-trip (%d of %d resources, err: %v), leaving the existing manifest untouched",
+			rc.Namespace(), name, len(decoded), len(merged), err)
+		return
+	}
 	if err = writeManifest(rc.Context(), value, name, rc.Namespace()); err != nil {
 		rc.Logger().Warnf("failed to write partial manifest for %s/%s: %s", rc.Namespace(), name, err)
 		return
@@ -496,19 +511,13 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 		}
 		rc.Logger().Debugf(`applyManifest going for item: %s,conditons: %t,%t`, key, didChange, exists)
 		if err = applyResource(rc.Context(), r, k8s.WithWait(wait)); err != nil {
-			// k8s.Rollout creates or updates before it waits for readiness, so when a
-			// wait was requested the object may well exist despite this error. Record
-			// such a resource if it is new to us: an entry for something absent is
-			// harmless to uninstall, which only warns, while a missing entry leaks.
-			// Resources already in the recorded manifest are deliberately left at their
-			// old form so a retry still diffs against what is really deployed.
-			//
-			// The lookup uses the canonical name: `key` above is the post-renameStss
-			// name, which for a StatefulSet never matches the canonical name `changed`
-			// was populated under, so it would report every StatefulSet as new.
-			if _, known := changed[resourceKey(kind, canonical[i].GetName())]; wait > 0 && !known {
-				applied = append(applied, canonical[i])
-			}
+			// Deliberately not recorded. k8s.Rollout creates before it waits for
+			// readiness, so a failed wait can leave the object behind and that one does
+			// leak until the next successful rollout records it. Recording it anyway
+			// would be worse: we cannot tell that case apart from an admission or
+			// validation rejection where nothing was created, and recording a resource
+			// that does not exist makes the next rollout diff it against itself, skip
+			// it, and report success while it stays missing.
 			return
 		}
 		applied = append(applied, canonical[i])

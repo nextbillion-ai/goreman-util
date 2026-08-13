@@ -328,9 +328,10 @@ spec:
 	assert.Equal(t, "sts1", applied[0].GetName())
 }
 
-func TestApplyRecordsNewResourceThatMayExistAfterWaitFailure(t *testing.T) {
-	// k8s.Rollout creates before it waits, so with wait > 0 a failure can leave the
-	// object behind. A brand new resource must still be recorded or it leaks.
+func TestApplyNeverRecordsAFailedResource(t *testing.T) {
+	// Recording a resource we did not manage to apply would make the next rollout diff
+	// it against itself, skip it, and report success while it stays missing. That holds
+	// whether or not a readiness wait was requested.
 	svc, err := k8s.DecodeYAML("kind: Service\nmetadata:\n  name: svc1\nspec:\n  ports:\n  - port: 1")
 	if err != nil {
 		panic(err)
@@ -338,48 +339,35 @@ func TestApplyRecordsNewResourceThatMayExistAfterWaitFailure(t *testing.T) {
 	orgApplyResource := applyResource
 	defer func() { applyResource = orgApplyResource }()
 	applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.OperationOption) error {
-		return fmt.Errorf("timed out waiting for readiness")
+		return fmt.Errorf("admission webhook denied the request")
 	}
 	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
 
-	applied, err := apply(rc, []k8s.Resource{svc}, nil, time.Minute, map[string]bool{})
-	assert.Error(t, err)
-	assert.Len(t, applied, 1, "new resource must be recorded when a wait was requested")
-
-	// With no wait there is no readiness phase, so a failure means nothing was created.
-	applied, err = apply(rc, []k8s.Resource{svc}, nil, 0, map[string]bool{})
-	assert.Error(t, err)
-	assert.Len(t, applied, 0, "without a wait a failure means the object was not created")
-
-	// A resource already in the recorded manifest stays at its old form so that a retry
-	// still sees it as changed.
-	applied, err = apply(rc, []k8s.Resource{svc}, nil, time.Minute, map[string]bool{
-		resourceKey(string(k8s.KindService), "svc1"): true,
-	})
-	assert.Error(t, err)
-	assert.Len(t, applied, 0, "known resources must not be overwritten with the new form")
+	for _, wait := range []time.Duration{0, time.Minute} {
+		applied, err := apply(rc, []k8s.Resource{svc}, nil, wait, map[string]bool{})
+		assert.Error(t, err)
+		assert.Len(t, applied, 0, "a resource that failed to apply must not be recorded")
+	}
 }
 
-func TestApplyWaitFailureUsesCanonicalNameForKnownStatefulSet(t *testing.T) {
-	// `changed` is keyed by the canonical name, but the loop key is the post-renameStss
-	// name. Looking up the renamed key would report an already-recorded StatefulSet as
-	// new and overwrite its old recorded form.
-	sts, err := k8s.DecodeYAML("kind: StatefulSet\nmetadata:\n  name: sts1\nspec:\n  replicas: 1\n  template:\n    spec:\n      containers:\n      - image: whocares")
+func TestRecordPartialManifestSkipsContentThatCannotRoundTrip(t *testing.T) {
+	// DecodeAllYAML splits on the substring "---", so a PEM block inside a ConfigMap
+	// does not survive. Overwriting a readable manifest with that would leave uninstall
+	// unable to decode anything and delete nothing.
+	cm, err := k8s.DecodeYAML("kind: ConfigMap\nmetadata:\n  name: cm1\ndata:\n  cert: |\n    -----BEGIN CERTIFICATE-----\n    abc\n    -----END CERTIFICATE-----\n")
 	if err != nil {
 		panic(err)
 	}
-	orgApplyResource := applyResource
-	defer func() { applyResource = orgApplyResource }()
-	applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.OperationOption) error {
-		return fmt.Errorf("timed out waiting for readiness")
+	orgWriteManifest := writeManifest
+	defer func() { writeManifest = orgWriteManifest }()
+	var called bool
+	writeManifest = func(ctx context.Context, value, name, namespace string) error {
+		called = true
+		return nil
 	}
 	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
-
-	applied, err := apply(rc, []k8s.Resource{sts}, nil, time.Minute, map[string]bool{
-		resourceKey(string(k8s.KindStatefulSet), "sts1"): true,
-	})
-	assert.Error(t, err)
-	assert.Len(t, applied, 0, "a StatefulSet already in the manifest must keep its old recorded form")
+	recordPartialManifest(rc, nil, []k8s.Resource{cm}, "release1")
+	assert.False(t, called, "must not overwrite the existing manifest with unreadable content")
 }
 
 func TestMergeResourcesKeepsSameNameAcrossNamespaces(t *testing.T) {
