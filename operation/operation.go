@@ -354,6 +354,9 @@ var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.Ope
 // decodeAllYAML is a seam over k8s.DecodeAllYAML for the round trip check below.
 var decodeAllYAML = k8s.DecodeAllYAML
 
+// manifestWriteTimeout bounds the detached write of a partial manifest.
+const manifestWriteTimeout = 30 * time.Second
+
 // mergeResources overlays applied on top of old, keyed by namespace+kind+name.
 //
 // Resources that were never applied stay at their old recorded form, which is exactly
@@ -450,7 +453,13 @@ func recordPartialManifest(rc global.ResourceContext, old, applied []k8s.Resourc
 			return
 		}
 	}
-	if err = writeManifest(rc.Context(), value, name, rc.Namespace()); err != nil {
+	// Detach from the rollout's context. A cancelled or timed out context is itself a
+	// reason a rollout fails, and inheriting it here would mean the one case where the
+	// record matters most is the one case it never gets written. Values are preserved,
+	// only cancellation is dropped.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(rc.Context()), manifestWriteTimeout)
+	defer cancel()
+	if err = writeManifest(writeCtx, value, name, rc.Namespace()); err != nil {
 		rc.Logger().Warnf("failed to write partial manifest for %s/%s: %s", rc.Namespace(), name, err)
 		return
 	}

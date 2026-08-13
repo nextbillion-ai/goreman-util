@@ -370,6 +370,29 @@ func TestRecordPartialManifestSkipsContentThatCannotRoundTrip(t *testing.T) {
 	assert.False(t, called, "must not overwrite the existing manifest with unreadable content")
 }
 
+func TestRecordPartialManifestWritesEvenWhenContextIsCancelled(t *testing.T) {
+	// A cancelled or timed out context is itself a reason a rollout fails, and that is
+	// exactly when the record matters. The write must not inherit the cancellation.
+	svc, err := k8s.DecodeYAML("kind: Service\nmetadata:\n  name: svc1")
+	if err != nil {
+		panic(err)
+	}
+	orgWriteManifest := writeManifest
+	defer func() { writeManifest = orgWriteManifest }()
+	var gotErr error
+	writeManifest = func(ctx context.Context, value, name, namespace string) error {
+		gotErr = ctx.Err()
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rc := global.NewContext(ctx, global.WithLogLevel(logrus.ErrorLevel))
+	recordPartialManifest(rc, nil, []k8s.Resource{svc}, "release1")
+
+	assert.NoError(t, gotErr, "the write context must not carry the rollout's cancellation")
+}
+
 func TestRecordPartialManifestSkipsWhenIdentitiesShift(t *testing.T) {
 	// A stray "---" can split one document while another is dropped as empty, leaving
 	// the count intact but the identities wrong. Uninstall acts on the identities.
