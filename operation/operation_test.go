@@ -322,7 +322,7 @@ spec:
 	}
 
 	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
-	applied, err := apply(rc, []k8s.Resource{sts, svc}, nil, 0, map[string]bool{})
+	applied, _, err := apply(rc, []k8s.Resource{sts, svc}, nil, 0, map[string]bool{})
 	assert.Error(t, err)
 	assert.Len(t, applied, 1)
 	assert.Equal(t, "sts1", applied[0].GetName())
@@ -344,7 +344,7 @@ func TestApplyNeverRecordsAFailedResource(t *testing.T) {
 	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
 
 	for _, wait := range []time.Duration{0, time.Minute} {
-		applied, err := apply(rc, []k8s.Resource{svc}, nil, wait, map[string]bool{})
+		applied, _, err := apply(rc, []k8s.Resource{svc}, nil, wait, map[string]bool{})
 		assert.Error(t, err)
 		assert.Len(t, applied, 0, "a resource that failed to apply must not be recorded")
 	}
@@ -392,6 +392,78 @@ func TestRecordPartialManifestWritesEvenWhenContextIsCancelled(t *testing.T) {
 	recordPartialManifest(rc, nil, []k8s.Resource{svc}, "release1")
 
 	assert.NoError(t, gotErr, "the write context must not carry the rollout's cancellation")
+}
+
+func TestApplyReportsFailedRemovals(t *testing.T) {
+	// A resource dropped from the chart whose deletion fails is still running. It has to
+	// be reported, or the caller writes a manifest that no longer mentions it and
+	// nothing ever deletes it again.
+	orgDoRemove := doRemove
+	defer func() { doRemove = orgDoRemove }()
+	doRemove = func(ctx context.Context, name, namespace string, kind k8s.Kind, options ...k8s.OperationOption) error {
+		if name == "stuck" {
+			return fmt.Errorf("object has a finalizer")
+		}
+		return nil
+	}
+	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
+
+	removals := []toRemove{
+		{name: "gone", namespace: "ns", kind: k8s.KindService},
+		{name: "stuck", namespace: "ns", kind: k8s.KindConfigMap},
+	}
+	applied, failed, err := apply(rc, nil, removals, 0, map[string]bool{})
+	assert.NoError(t, err, "a failed removal must not fail the rollout")
+	assert.Empty(t, applied)
+	assert.Len(t, failed, 1)
+	assert.Equal(t, "stuck", failed[0].name)
+}
+
+func TestResourcesForMatchesRemovalsByIdentity(t *testing.T) {
+	decode := func(y string) k8s.Resource {
+		r, err := k8s.DecodeYAML(y)
+		if err != nil {
+			panic(err)
+		}
+		return r
+	}
+	cm := decode("kind: ConfigMap\nmetadata:\n  name: stuck\n  namespace: ns")
+	svc := decode("kind: Service\nmetadata:\n  name: other\n  namespace: ns")
+
+	kept := resourcesFor([]k8s.Resource{cm, svc}, []toRemove{
+		{name: "stuck", namespace: "ns", kind: k8s.KindConfigMap},
+	})
+	assert.Len(t, kept, 1)
+	assert.Equal(t, "stuck", kept[0].GetName())
+
+	// a same-named resource of a different kind must not match
+	kept = resourcesFor([]k8s.Resource{cm}, []toRemove{
+		{name: "stuck", namespace: "ns", kind: k8s.KindService},
+	})
+	assert.Empty(t, kept)
+
+	// a rotation-suffixed removal has no manifest entry, so it matches nothing
+	kept = resourcesFor([]k8s.Resource{cm}, []toRemove{
+		{name: "stuck---0", namespace: "ns", kind: k8s.KindStatefulSet},
+	})
+	assert.Empty(t, kept)
+}
+
+func TestEncodeManifestRejectsContentThatCannotRoundTrip(t *testing.T) {
+	cm, err := k8s.DecodeYAML("kind: ConfigMap\nmetadata:\n  name: cm1\ndata:\n  cert: |\n    -----BEGIN CERTIFICATE-----\n    abc\n    -----END CERTIFICATE-----\n")
+	if err != nil {
+		panic(err)
+	}
+	_, err = encodeManifest([]k8s.Resource{cm})
+	assert.Error(t, err)
+
+	svc, err := k8s.DecodeYAML("kind: Service\nmetadata:\n  name: svc1")
+	if err != nil {
+		panic(err)
+	}
+	value, err := encodeManifest([]k8s.Resource{svc})
+	assert.NoError(t, err)
+	assert.Contains(t, value, "svc1")
 }
 
 func TestMergeResourcesKeepsSameNameAcrossNamespaces(t *testing.T) {

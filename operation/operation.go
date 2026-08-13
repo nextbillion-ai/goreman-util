@@ -337,12 +337,29 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 		opts.wait = time.Duration(0)
 	}
 	var applied []k8s.Resource
-	if applied, err = apply(rc, new, toRemoves, opts.wait, changed); err != nil {
+	var failedRemovals []toRemove
+	if applied, failedRemovals, err = apply(rc, new, toRemoves, opts.wait, changed); err != nil {
 		// The rollout stopped part way through, so the full desired manifest would be a
 		// lie: writing it would both hide resources from uninstall and make the next
 		// retry believe everything is already applied. Record what is actually there.
 		recordPartialManifest(rc, old, applied, manifestName)
 		return err
+	}
+	// A resource whose deletion failed is still running, so it has to stay in the
+	// manifest. Writing the desired manifest alone would drop it, and nothing would ever
+	// delete it again. On success `applied` is every rendered resource in canonical
+	// form, so the two merge cleanly.
+	if kept := resourcesFor(old, failedRemovals); len(kept) > 0 {
+		var value string
+		if value, err = encodeManifest(mergeResources(applied, kept)); err != nil {
+			// Fall back to the desired manifest, which is what would have been written
+			// before this existed. The failed removals leak, but adds stay tracked.
+			rc.Logger().Warnf("could not record %d resource(s) whose removal failed for %s/%s, they will no longer be tracked: %s",
+				len(kept), rc.Namespace(), manifestName, err)
+		} else {
+			rc.Logger().Infof("keeping %d resource(s) whose removal failed in the manifest for %s/%s", len(kept), rc.Namespace(), manifestName)
+			return writeManifest(rc.Context(), value, manifestName, rc.Namespace())
+		}
 	}
 	return writeManifest(rc.Context(), newStr, manifestName, rc.Namespace())
 }
@@ -418,6 +435,48 @@ func encodeResources(list []k8s.Resource) (string, error) {
 	return "---\n" + strings.Join(docs, "\n---\n") + "\n", nil
 }
 
+// encodeManifest serializes resources and verifies the result reads back before anyone
+// stores it. Cheap assertion on a novel code path: every other manifest write stores a
+// string DecodeAllYAML had just parsed, while encodeResources serializes afresh, and
+// these writes replace an existing record - so never overwrite a readable manifest with
+// something that cannot be read back.
+func encodeManifest(list []k8s.Resource) (string, error) {
+	var value string
+	var err error
+	if value, err = encodeResources(list); err != nil {
+		return "", fmt.Errorf("failed to encode manifest: %w", err)
+	}
+	var decoded []k8s.Resource
+	if decoded, err = k8s.DecodeAllYAML(value); err != nil {
+		return "", fmt.Errorf("manifest does not round-trip: %w", err)
+	}
+	if len(decoded) != len(list) {
+		return "", fmt.Errorf("manifest round-trips to %d of %d resources", len(decoded), len(list))
+	}
+	return value, nil
+}
+
+// resourcesFor picks the recorded resources matching the given removals.
+//
+// Removals carrying a rotation suffix have no manifest entry of their own - the manifest
+// holds the canonical StatefulSet name - so they simply do not match, which is correct.
+func resourcesFor(recorded []k8s.Resource, removals []toRemove) []k8s.Resource {
+	if len(removals) == 0 {
+		return nil
+	}
+	wanted := map[string]bool{}
+	for _, r := range removals {
+		wanted[r.namespace+"/"+resourceKey(r.kind, r.name)] = true
+	}
+	var kept []k8s.Resource
+	for _, r := range recorded {
+		if wanted[manifestKey(r)] {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
 // recordPartialManifest persists what is known to exist after a failed rollout, so that a
 // later uninstall can still clean it up and a retry still sees the un-applied resources as
 // changed. Best effort: failures here are logged, never returned, so they cannot mask the
@@ -429,20 +488,8 @@ func recordPartialManifest(rc global.ResourceContext, old, applied []k8s.Resourc
 	}
 	var value string
 	var err error
-	if value, err = encodeResources(merged); err != nil {
-		rc.Logger().Warnf("failed to encode partial manifest for %s/%s: %s", rc.Namespace(), name, err)
-		return
-	}
-	// Cheap assertion on a novel code path, not a fix for any input we can produce.
-	// Every other manifest write stores a string DecodeAllYAML had just parsed -
-	// GenManifest decodes helm's output, getExistingManifest decodes the stored copy -
-	// so it is known readable. encodeResources is the one route that serializes afresh,
-	// and this write replaces the existing record, so do not overwrite a readable
-	// manifest with something that cannot be read back.
-	var decoded []k8s.Resource
-	if decoded, err = k8s.DecodeAllYAML(value); err != nil || len(decoded) != len(merged) {
-		rc.Logger().Warnf("partial manifest for %s/%s does not round-trip (%d of %d resources, err: %v), leaving the existing manifest untouched",
-			rc.Namespace(), name, len(decoded), len(merged), err)
+	if value, err = encodeManifest(merged); err != nil {
+		rc.Logger().Warnf("not recording partial manifest for %s/%s, leaving the existing one untouched: %s", rc.Namespace(), name, err)
 		return
 	}
 	// Detach from the rollout's context. A cancelled or timed out context is itself a
@@ -495,7 +542,10 @@ func renameStss(list []k8s.Resource, stsNameToRealName map[string]string) {
 // The returned resources are the *canonical* ones, i.e. the pre-renameStss form, because
 // that is how the manifest ConfigMap is keyed. Callers use them to record what actually
 // landed when the rollout only partially succeeds.
-func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (applied []k8s.Resource, err error) {
+// It also reports the removals that failed. Those resources are still in the cluster, so
+// dropping them from the manifest - as writing the new desired manifest alone would -
+// would leave nothing tracking them and they would leak permanently.
+func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (applied []k8s.Resource, failedRemovals []toRemove, err error) {
 	// Snapshot before renameStss, which replaces StatefulSet entries in `new` with
 	// renamed copies. Index correspondence is preserved because it assigns in place.
 	canonical := make([]k8s.Resource, len(new))
@@ -543,8 +593,9 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 	}
 
 	for _, r := range toRemoves {
-		if err = k8s.Remove(rc.Context(), r.name, r.namespace, r.kind, k8s.WithWait(2*time.Minute)); err != nil {
+		if err = doRemove(rc.Context(), r.name, r.namespace, r.kind, k8s.WithWait(2*time.Minute)); err != nil {
 			rc.Logger().Warnf("failed to remove %s-%s/%s: %s", r.kind, r.namespace, r.name, err)
+			failedRemovals = append(failedRemovals, r)
 		}
 	}
 	err = nil
