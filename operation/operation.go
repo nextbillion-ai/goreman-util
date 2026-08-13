@@ -361,21 +361,20 @@ var decodeAllYAML = k8s.DecodeAllYAML
 // but short enough not to drag out a shutdown.
 const manifestWriteTimeout = 10 * time.Second
 
-// mergeResources overlays applied on top of old, keyed by namespace+kind+name.
+// manifestKey identifies one resource within a manifest document set: the triple that
+// uninstall dispatches on. The namespace is included even though resourceKey elsewhere
+// ignores it, because the manifest is rewritten wholesale here - collapsing two
+// same-named resources from different namespaces would silently drop one and leak it.
+func manifestKey(r k8s.Resource) string {
+	return r.GetNamespace() + "/" + resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
+}
+
+// mergeResources overlays applied on top of old, keyed by manifestKey.
 //
 // Resources that were never applied stay at their old recorded form, which is exactly
 // what is still running in the cluster: an update that failed leaves the previous object
 // intact, and a resource that was never reached was never touched. Old resources that are
 // absent from applied are kept so that uninstall still removes them.
-//
-// The namespace is part of the key even though resourceKey elsewhere ignores it: this
-// rewrites the manifest, so collapsing two same-named resources from different namespaces
-// would silently drop one of them and leak it forever.
-// manifestKey identifies a resource within a manifest document set.
-func manifestKey(r k8s.Resource) string {
-	return r.GetNamespace() + "/" + resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
-}
-
 func mergeResources(old, applied []k8s.Resource) []k8s.Resource {
 	var merged []k8s.Resource
 	index := map[string]int{}
