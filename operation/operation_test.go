@@ -360,6 +360,28 @@ func TestApplyRecordsNewResourceThatMayExistAfterWaitFailure(t *testing.T) {
 	assert.Len(t, applied, 0, "known resources must not be overwritten with the new form")
 }
 
+func TestApplyWaitFailureUsesCanonicalNameForKnownStatefulSet(t *testing.T) {
+	// `changed` is keyed by the canonical name, but the loop key is the post-renameStss
+	// name. Looking up the renamed key would report an already-recorded StatefulSet as
+	// new and overwrite its old recorded form.
+	sts, err := k8s.DecodeYAML("kind: StatefulSet\nmetadata:\n  name: sts1\nspec:\n  replicas: 1\n  template:\n    spec:\n      containers:\n      - image: whocares")
+	if err != nil {
+		panic(err)
+	}
+	orgApplyResource := applyResource
+	defer func() { applyResource = orgApplyResource }()
+	applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.OperationOption) error {
+		return fmt.Errorf("timed out waiting for readiness")
+	}
+	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
+
+	applied, err := apply(rc, []k8s.Resource{sts}, nil, time.Minute, map[string]bool{
+		resourceKey(string(k8s.KindStatefulSet), "sts1"): true,
+	})
+	assert.Error(t, err)
+	assert.Len(t, applied, 0, "a StatefulSet already in the manifest must keep its old recorded form")
+}
+
 func TestMergeResourcesKeepsSameNameAcrossNamespaces(t *testing.T) {
 	decode := func(y string) k8s.Resource {
 		r, err := k8s.DecodeYAML(y)

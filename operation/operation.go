@@ -501,8 +501,12 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 			// such a resource if it is new to us: an entry for something absent is
 			// harmless to uninstall, which only warns, while a missing entry leaks.
 			// Resources already in the recorded manifest are deliberately left at their
-			// old form so a retry still sees them as changed.
-			if wait > 0 && !exists {
+			// old form so a retry still diffs against what is really deployed.
+			//
+			// The lookup uses the canonical name: `key` above is the post-renameStss
+			// name, which for a StatefulSet never matches the canonical name `changed`
+			// was populated under, so it would report every StatefulSet as new.
+			if _, known := changed[resourceKey(kind, canonical[i].GetName())]; wait > 0 && !known {
 				applied = append(applied, canonical[i])
 			}
 			return
