@@ -354,8 +354,11 @@ var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.Ope
 // decodeAllYAML is a seam over k8s.DecodeAllYAML for the round trip check below.
 var decodeAllYAML = k8s.DecodeAllYAML
 
-// manifestWriteTimeout bounds the detached write of a partial manifest.
-const manifestWriteTimeout = 30 * time.Second
+// manifestWriteTimeout bounds the detached write of a partial manifest. Because the
+// write ignores the caller's cancellation, this is also the worst case delay it can add
+// to Rollout returning its error - keep it comfortably above a single ConfigMap write
+// but short enough not to drag out a shutdown.
+const manifestWriteTimeout = 10 * time.Second
 
 // mergeResources overlays applied on top of old, keyed by namespace+kind+name.
 //
