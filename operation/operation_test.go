@@ -451,7 +451,7 @@ func TestFinalManifest(t *testing.T) {
 	assert.Equal(t, "RENDERED", got)
 }
 
-func TestResourcesForMatchesRemovalsByIdentity(t *testing.T) {
+func TestResourcesMatchingByIdentity(t *testing.T) {
 	decode := func(y string) k8s.Resource {
 		r, err := k8s.DecodeYAML(y)
 		if err != nil {
@@ -462,20 +462,20 @@ func TestResourcesForMatchesRemovalsByIdentity(t *testing.T) {
 	cm := decode("kind: ConfigMap\nmetadata:\n  name: stuck\n  namespace: ns")
 	svc := decode("kind: Service\nmetadata:\n  name: other\n  namespace: ns")
 
-	kept := resourcesFor([]k8s.Resource{cm, svc}, []toRemove{
+	kept := resourcesMatching([]k8s.Resource{cm, svc}, []toRemove{
 		{name: "stuck", namespace: "ns", kind: k8s.KindConfigMap},
 	})
 	assert.Len(t, kept, 1)
 	assert.Equal(t, "stuck", kept[0].GetName())
 
 	// a same-named resource of a different kind must not match
-	kept = resourcesFor([]k8s.Resource{cm}, []toRemove{
+	kept = resourcesMatching([]k8s.Resource{cm}, []toRemove{
 		{name: "stuck", namespace: "ns", kind: k8s.KindService},
 	})
 	assert.Empty(t, kept)
 
 	// a rotation-suffixed removal has no manifest entry, so it matches nothing
-	kept = resourcesFor([]k8s.Resource{cm}, []toRemove{
+	kept = resourcesMatching([]k8s.Resource{cm}, []toRemove{
 		{name: "stuck---0", namespace: "ns", kind: k8s.KindStatefulSet},
 	})
 	assert.Empty(t, kept)

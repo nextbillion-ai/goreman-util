@@ -363,8 +363,21 @@ const manifestWriteTimeout = 10 * time.Second
 // uninstall dispatches on. The namespace is included even though resourceKey elsewhere
 // ignores it, because the manifest is rewritten wholesale here - collapsing two
 // same-named resources from different namespaces would silently drop one and leak it.
-func manifestKey(r k8s.Resource) string {
-	return r.GetNamespace() + "/" + resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
+//
+// Everything that keys into a manifest goes through here, so a resource and the removal
+// referring to it cannot disagree about their identity.
+func manifestKey(namespace, kind, name string) string {
+	return namespace + "/" + resourceKey(kind, name)
+}
+
+// keyOf is manifestKey for an already-decoded resource.
+func keyOf(r k8s.Resource) string {
+	return manifestKey(r.GetNamespace(), r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
+}
+
+// key is manifestKey for a pending removal.
+func (t toRemove) key() string {
+	return manifestKey(t.namespace, t.kind, t.name)
 }
 
 // mergeResources overlays applied on top of old, keyed by manifestKey.
@@ -377,7 +390,7 @@ func mergeResources(old, applied []k8s.Resource) []k8s.Resource {
 	var merged []k8s.Resource
 	index := map[string]int{}
 	var add = func(r k8s.Resource) {
-		key := manifestKey(r)
+		key := keyOf(r)
 		if i, ok := index[key]; ok {
 			merged[i] = r
 			return
@@ -440,25 +453,23 @@ func encodeManifest(list []k8s.Resource) (string, error) {
 	return value, nil
 }
 
-// resourcesFor picks the recorded resources matching the given removals.
+// resourcesMatching returns the recorded resources the given removals refer to, in
+// recorded order so the manifest stays stable.
 //
-// Removals carrying a rotation suffix have no manifest entry of their own - the manifest
-// holds the canonical StatefulSet name - so they simply do not match, which is correct.
-func resourcesFor(recorded []k8s.Resource, removals []toRemove) []k8s.Resource {
-	if len(removals) == 0 {
-		return nil
+// A removal carrying a rotation suffix has no manifest entry of its own - the manifest
+// holds the canonical StatefulSet name - so it matches nothing, which is correct.
+func resourcesMatching(recorded []k8s.Resource, removals []toRemove) []k8s.Resource {
+	wanted := make(map[string]bool, len(removals))
+	for _, t := range removals {
+		wanted[t.key()] = true
 	}
-	wanted := map[string]bool{}
-	for _, r := range removals {
-		wanted[r.namespace+"/"+resourceKey(r.kind, r.name)] = true
-	}
-	var kept []k8s.Resource
+	var matched []k8s.Resource
 	for _, r := range recorded {
-		if wanted[manifestKey(r)] {
-			kept = append(kept, r)
+		if wanted[keyOf(r)] {
+			matched = append(matched, r)
 		}
 	}
-	return kept
+	return matched
 }
 
 // finalManifest returns the manifest to record after a successful rollout.
@@ -472,7 +483,7 @@ func resourcesFor(recorded []k8s.Resource, removals []toRemove) []k8s.Resource {
 // been written before this existed: the failed removals stop being tracked, but
 // everything else stays correct.
 func finalManifest(rc global.ResourceContext, old, applied []k8s.Resource, failedRemovals []toRemove, rendered, name string) string {
-	kept := resourcesFor(old, failedRemovals)
+	kept := resourcesMatching(old, failedRemovals)
 	if len(kept) == 0 {
 		return rendered
 	}
