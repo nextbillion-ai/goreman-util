@@ -351,6 +351,9 @@ var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.Ope
 	return k8s.Rollout(ctx, r, options...)
 }
 
+// decodeAllYAML is a seam over k8s.DecodeAllYAML for the round trip check below.
+var decodeAllYAML = k8s.DecodeAllYAML
+
 // mergeResources overlays applied on top of old, keyed by namespace+kind+name.
 //
 // Resources that were never applied stay at their old recorded form, which is exactly
@@ -361,11 +364,16 @@ var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.Ope
 // The namespace is part of the key even though resourceKey elsewhere ignores it: this
 // rewrites the manifest, so collapsing two same-named resources from different namespaces
 // would silently drop one of them and leak it forever.
+// manifestKey identifies a resource within a manifest document set.
+func manifestKey(r k8s.Resource) string {
+	return r.GetNamespace() + "/" + resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
+}
+
 func mergeResources(old, applied []k8s.Resource) []k8s.Resource {
 	var merged []k8s.Resource
 	index := map[string]int{}
 	var add = func(r k8s.Resource) {
-		key := r.GetNamespace() + "/" + resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
+		key := manifestKey(r)
 		if i, ok := index[key]; ok {
 			merged[i] = r
 			return
@@ -427,10 +435,20 @@ func recordPartialManifest(rc global.ResourceContext, old, applied []k8s.Resourc
 	// Never replace a readable manifest with one that cannot be read back: uninstall
 	// would then fail to decode it and delete nothing at all.
 	var decoded []k8s.Resource
-	if decoded, err = k8s.DecodeAllYAML(value); err != nil || len(decoded) != len(merged) {
+	if decoded, err = decodeAllYAML(value); err != nil || len(decoded) != len(merged) {
 		rc.Logger().Warnf("partial manifest for %s/%s does not round-trip (%d of %d resources, err: %v), leaving the existing manifest untouched",
 			rc.Namespace(), name, len(decoded), len(merged), err)
 		return
+	}
+	// Matching counts alone is not enough: a stray "---" can split one document into
+	// fragments while another is dropped as empty, landing back on the same total. What
+	// uninstall acts on is each document's identity, so verify those.
+	for i, r := range decoded {
+		if manifestKey(r) != manifestKey(merged[i]) {
+			rc.Logger().Warnf("partial manifest for %s/%s round-trips to different resources (%s != %s), leaving the existing manifest untouched",
+				rc.Namespace(), name, manifestKey(r), manifestKey(merged[i]))
+			return
+		}
 	}
 	if err = writeManifest(rc.Context(), value, name, rc.Namespace()); err != nil {
 		rc.Logger().Warnf("failed to write partial manifest for %s/%s: %s", rc.Namespace(), name, err)
