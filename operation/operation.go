@@ -338,7 +338,7 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 		recordPartialManifest(rc, old, applied, manifestName)
 		return err
 	}
-	return writeManifest(rc.Context(), newStr, new[0].GetName(), rc.Namespace())
+	return writeManifest(rc.Context(), newStr, manifestName, rc.Namespace())
 }
 
 // applyResource is a seam over k8s.Rollout so that tests can drive partial failures.
@@ -346,17 +346,21 @@ var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.Ope
 	return k8s.Rollout(ctx, r, options...)
 }
 
-// mergeResources overlays applied on top of old, keyed by kind+name.
+// mergeResources overlays applied on top of old, keyed by namespace+kind+name.
 //
 // Resources that were never applied stay at their old recorded form, which is exactly
 // what is still running in the cluster: an update that failed leaves the previous object
 // intact, and a resource that was never reached was never touched. Old resources that are
 // absent from applied are kept so that uninstall still removes them.
+//
+// The namespace is part of the key even though resourceKey elsewhere ignores it: this
+// rewrites the manifest, so collapsing two same-named resources from different namespaces
+// would silently drop one of them and leak it forever.
 func mergeResources(old, applied []k8s.Resource) []k8s.Resource {
 	var merged []k8s.Resource
 	index := map[string]int{}
 	var add = func(r k8s.Resource) {
-		key := resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
+		key := r.GetNamespace() + "/" + resourceKey(r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
 		if i, ok := index[key]; ok {
 			merged[i] = r
 			return
@@ -492,6 +496,15 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 		}
 		rc.Logger().Debugf(`applyManifest going for item: %s,conditons: %t,%t`, key, didChange, exists)
 		if err = applyResource(rc.Context(), r, k8s.WithWait(wait)); err != nil {
+			// k8s.Rollout creates or updates before it waits for readiness, so when a
+			// wait was requested the object may well exist despite this error. Record
+			// such a resource if it is new to us: an entry for something absent is
+			// harmless to uninstall, which only warns, while a missing entry leaks.
+			// Resources already in the recorded manifest are deliberately left at their
+			// old form so a retry still sees them as changed.
+			if wait > 0 && !exists {
+				applied = append(applied, canonical[i])
+			}
 			return
 		}
 		applied = append(applied, canonical[i])

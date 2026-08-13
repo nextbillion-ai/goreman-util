@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/nextbillion-ai/goreman-util/global"
 	"github.com/sirupsen/logrus"
@@ -325,6 +326,57 @@ spec:
 	assert.Error(t, err)
 	assert.Len(t, applied, 1)
 	assert.Equal(t, "sts1", applied[0].GetName())
+}
+
+func TestApplyRecordsNewResourceThatMayExistAfterWaitFailure(t *testing.T) {
+	// k8s.Rollout creates before it waits, so with wait > 0 a failure can leave the
+	// object behind. A brand new resource must still be recorded or it leaks.
+	svc, err := k8s.DecodeYAML("kind: Service\nmetadata:\n  name: svc1\nspec:\n  ports:\n  - port: 1")
+	if err != nil {
+		panic(err)
+	}
+	orgApplyResource := applyResource
+	defer func() { applyResource = orgApplyResource }()
+	applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.OperationOption) error {
+		return fmt.Errorf("timed out waiting for readiness")
+	}
+	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
+
+	applied, err := apply(rc, []k8s.Resource{svc}, nil, time.Minute, map[string]bool{})
+	assert.Error(t, err)
+	assert.Len(t, applied, 1, "new resource must be recorded when a wait was requested")
+
+	// With no wait there is no readiness phase, so a failure means nothing was created.
+	applied, err = apply(rc, []k8s.Resource{svc}, nil, 0, map[string]bool{})
+	assert.Error(t, err)
+	assert.Len(t, applied, 0, "without a wait a failure means the object was not created")
+
+	// A resource already in the recorded manifest stays at its old form so that a retry
+	// still sees it as changed.
+	applied, err = apply(rc, []k8s.Resource{svc}, nil, time.Minute, map[string]bool{
+		resourceKey(string(k8s.KindService), "svc1"): true,
+	})
+	assert.Error(t, err)
+	assert.Len(t, applied, 0, "known resources must not be overwritten with the new form")
+}
+
+func TestMergeResourcesKeepsSameNameAcrossNamespaces(t *testing.T) {
+	decode := func(y string) k8s.Resource {
+		r, err := k8s.DecodeYAML(y)
+		if err != nil {
+			panic(err)
+		}
+		return r
+	}
+	// Same kind and name, different namespaces: collapsing them would drop one from the
+	// rewritten manifest and leak it.
+	svcA := decode("kind: Service\nmetadata:\n  name: shared\n  namespace: a")
+	svcB := decode("kind: Service\nmetadata:\n  name: shared\n  namespace: b")
+
+	merged := mergeResources([]k8s.Resource{svcA, svcB}, nil)
+	assert.Len(t, merged, 2)
+	assert.Equal(t, "a", merged[0].GetNamespace())
+	assert.Equal(t, "b", merged[1].GetNamespace())
 }
 
 func TestMergeResourcesOverlaysAppliedOnOld(t *testing.T) {
