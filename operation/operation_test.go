@@ -351,9 +351,10 @@ func TestApplyNeverRecordsAFailedResource(t *testing.T) {
 }
 
 func TestRecordPartialManifestSkipsContentThatCannotRoundTrip(t *testing.T) {
-	// DecodeAllYAML splits on the substring "---", so a PEM block inside a ConfigMap
-	// does not survive. Overwriting a readable manifest with that would leave uninstall
-	// unable to decode anything and delete nothing.
+	// Exercises the guard with content that provably does not survive the round trip:
+	// DecodeAllYAML splits on the substring "---", so a PEM block does not come back.
+	// Such a chart would already fail earlier in GenManifest, which decodes helm's
+	// output, so this is the guard working rather than a reachable production input.
 	cm, err := k8s.DecodeYAML("kind: ConfigMap\nmetadata:\n  name: cm1\ndata:\n  cert: |\n    -----BEGIN CERTIFICATE-----\n    abc\n    -----END CERTIFICATE-----\n")
 	if err != nil {
 		panic(err)

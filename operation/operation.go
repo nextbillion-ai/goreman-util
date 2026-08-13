@@ -436,10 +436,13 @@ func recordPartialManifest(rc global.ResourceContext, old, applied []k8s.Resourc
 		rc.Logger().Warnf("failed to encode partial manifest for %s/%s: %s", rc.Namespace(), name, err)
 		return
 	}
-	// DecodeAllYAML splits on the substring "---", so a resource carrying one in its
-	// content - a PEM block, an embedded manifest - does not survive the round trip.
-	// Never replace a readable manifest with one that cannot be read back: uninstall
-	// would then fail to decode it and delete nothing at all.
+	// Sanity check, not a fix for a known input. Every other manifest write stores a
+	// string DecodeAllYAML had just parsed successfully - GenManifest decodes helm's
+	// output, getExistingManifest decodes the stored copy - so the text is proven
+	// readable before it is stored. encodeResources is the one route that generates
+	// manifest text afresh, and this write replaces the existing record, so confirm it
+	// reads back before destroying what is already there. DecodeAllYAML splits on the
+	// substring "---", so a value that re-marshals to contain one would not survive.
 	var decoded []k8s.Resource
 	if decoded, err = decodeAllYAML(value); err != nil || len(decoded) != len(merged) {
 		rc.Logger().Warnf("partial manifest for %s/%s does not round-trip (%d of %d resources, err: %v), leaving the existing manifest untouched",
