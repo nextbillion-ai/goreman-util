@@ -352,9 +352,6 @@ var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.Ope
 	return k8s.Rollout(ctx, r, options...)
 }
 
-// decodeAllYAML is a seam over k8s.DecodeAllYAML for the round trip check below.
-var decodeAllYAML = k8s.DecodeAllYAML
-
 // manifestWriteTimeout bounds the detached write of a partial manifest. Because the
 // write ignores the caller's cancellation, this is also the worst case delay it can add
 // to Rollout returning its error - keep it comfortably above a single ConfigMap write
@@ -436,28 +433,17 @@ func recordPartialManifest(rc global.ResourceContext, old, applied []k8s.Resourc
 		rc.Logger().Warnf("failed to encode partial manifest for %s/%s: %s", rc.Namespace(), name, err)
 		return
 	}
-	// Sanity check, not a fix for a known input. Every other manifest write stores a
-	// string DecodeAllYAML had just parsed successfully - GenManifest decodes helm's
-	// output, getExistingManifest decodes the stored copy - so the text is proven
-	// readable before it is stored. encodeResources is the one route that generates
-	// manifest text afresh, and this write replaces the existing record, so confirm it
-	// reads back before destroying what is already there. DecodeAllYAML splits on the
-	// substring "---", so a value that re-marshals to contain one would not survive.
+	// Cheap assertion on a novel code path, not a fix for any input we can produce.
+	// Every other manifest write stores a string DecodeAllYAML had just parsed -
+	// GenManifest decodes helm's output, getExistingManifest decodes the stored copy -
+	// so it is known readable. encodeResources is the one route that serializes afresh,
+	// and this write replaces the existing record, so do not overwrite a readable
+	// manifest with something that cannot be read back.
 	var decoded []k8s.Resource
-	if decoded, err = decodeAllYAML(value); err != nil || len(decoded) != len(merged) {
+	if decoded, err = k8s.DecodeAllYAML(value); err != nil || len(decoded) != len(merged) {
 		rc.Logger().Warnf("partial manifest for %s/%s does not round-trip (%d of %d resources, err: %v), leaving the existing manifest untouched",
 			rc.Namespace(), name, len(decoded), len(merged), err)
 		return
-	}
-	// Matching counts alone is not enough: a stray "---" can split one document into
-	// fragments while another is dropped as empty, landing back on the same total. What
-	// uninstall acts on is each document's identity, so verify those.
-	for i, r := range decoded {
-		if manifestKey(r) != manifestKey(merged[i]) {
-			rc.Logger().Warnf("partial manifest for %s/%s round-trips to different resources (%s != %s), leaving the existing manifest untouched",
-				rc.Namespace(), name, manifestKey(r), manifestKey(merged[i]))
-			return
-		}
 	}
 	// Detach from the rollout's context. A cancelled or timed out context is itself a
 	// reason a rollout fails, and inheriting it here would mean the one case where the

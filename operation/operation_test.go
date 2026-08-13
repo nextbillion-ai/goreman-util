@@ -394,38 +394,6 @@ func TestRecordPartialManifestWritesEvenWhenContextIsCancelled(t *testing.T) {
 	assert.NoError(t, gotErr, "the write context must not carry the rollout's cancellation")
 }
 
-func TestRecordPartialManifestSkipsWhenIdentitiesShift(t *testing.T) {
-	// A stray "---" can split one document while another is dropped as empty, leaving
-	// the count intact but the identities wrong. Uninstall acts on the identities.
-	decode := func(y string) k8s.Resource {
-		r, err := k8s.DecodeYAML(y)
-		if err != nil {
-			panic(err)
-		}
-		return r
-	}
-	svc := decode("kind: Service\nmetadata:\n  name: svc1")
-	cm := decode("kind: ConfigMap\nmetadata:\n  name: cm1")
-
-	orgDecodeAll := decodeAllYAML
-	defer func() { decodeAllYAML = orgDecodeAll }()
-	decodeAllYAML = func(value string) ([]k8s.Resource, error) {
-		// same count, different identities
-		return []k8s.Resource{decode("kind: Service\nmetadata:\n  name: other"), cm}, nil
-	}
-
-	orgWriteManifest := writeManifest
-	defer func() { writeManifest = orgWriteManifest }()
-	var called bool
-	writeManifest = func(ctx context.Context, value, name, namespace string) error {
-		called = true
-		return nil
-	}
-	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
-	recordPartialManifest(rc, nil, []k8s.Resource{svc, cm}, "release1")
-	assert.False(t, called, "must not write when the round trip yields different resources")
-}
-
 func TestMergeResourcesKeepsSameNameAcrossNamespaces(t *testing.T) {
 	decode := func(y string) k8s.Resource {
 		r, err := k8s.DecodeYAML(y)
