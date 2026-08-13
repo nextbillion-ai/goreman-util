@@ -14,12 +14,15 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nextbillion-ai/goreman-util/global"
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/raw"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	sigsyaml "sigs.k8s.io/yaml"
 )
 
 type toRemove struct {
@@ -45,11 +48,14 @@ var getExistingManifest = func(ctx context.Context, name, namespace string) (exi
 	return
 }
 
-func getManifests(ctx context.Context, chartPath string, values raw.Map) (old []k8s.Resource, new []k8s.Resource, newMap map[string]*k8s.Resource, newStr string, err error) {
+// getManifests renders the chart and loads the previously recorded manifest. It also
+// returns the release name it read them under, so that whatever writes the manifest back
+// keys it identically - deriving that name twice is how reads and writes drift apart.
+func getManifests(ctx context.Context, chartPath string, values raw.Map) (name string, old []k8s.Resource, new []k8s.Resource, newMap map[string]*k8s.Resource, newStr string, err error) {
 	if new, newStr, err = k8s.GenManifest(ctx, chartPath, values); err != nil {
 		return
 	}
-	var name, namespace string
+	var namespace string
 	if name, err = raw.ChainGet[string](values, "global", "name"); err != nil {
 		return
 	}
@@ -285,7 +291,13 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	var old, new []k8s.Resource
 	var newMap map[string]*k8s.Resource
 	var newStr string
-	if old, new, newMap, newStr, err = getManifests(rc.Context(), chartPath, values); err != nil {
+	// manifestName is the release name getManifests just read the existing manifest
+	// under, so writes below land where the next read will look. new[0].GetName() is not
+	// a safe substitute: helm does not guarantee the first rendered object is named
+	// exactly global.name, and a chart whose first resource is e.g. "<release>-sa" would
+	// have its manifest written somewhere nothing looks for it.
+	var manifestName string
+	if manifestName, old, new, newMap, newStr, err = getManifests(rc.Context(), chartPath, values); err != nil {
 		return err
 	}
 	if len(new) == 0 {
@@ -324,13 +336,197 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	if !rotated {
 		opts.wait = time.Duration(0)
 	}
-	if err = apply(rc, new, toRemoves, opts.wait, changed); err != nil {
+	var applied []k8s.Resource
+	var failedRemovals []toRemove
+	if applied, failedRemovals, err = apply(rc, new, toRemoves, opts.wait, changed); err != nil {
+		// The rollout stopped part way through, so the full desired manifest would be a
+		// lie: writing it would both hide resources from uninstall and make the next
+		// retry believe everything is already applied. Record what is actually there.
+		recordPartialManifest(rc, old, applied, manifestName)
 		return err
 	}
-	return writeManifest(rc.Context(), newStr, new[0].GetName(), rc.Namespace())
+	return writeManifest(rc.Context(), finalManifest(rc, old, applied, failedRemovals, newStr, manifestName), manifestName, rc.Namespace())
 }
 
-func writeManifest(ctx context.Context, value, name, namespace string) error {
+// applyResource is a seam over k8s.Rollout so that tests can drive partial failures.
+var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.OperationOption) error {
+	return k8s.Rollout(ctx, r, options...)
+}
+
+// manifestWriteTimeout bounds the detached write of a partial manifest. Because the
+// write ignores the caller's cancellation, this is also the worst case delay it can add
+// to Rollout returning its error - keep it comfortably above a single ConfigMap write
+// but short enough not to drag out a shutdown.
+const manifestWriteTimeout = 10 * time.Second
+
+// manifestKey identifies one resource within a manifest document set: the triple that
+// uninstall dispatches on. The namespace is included even though resourceKey elsewhere
+// ignores it, because the manifest is rewritten wholesale here - collapsing two
+// same-named resources from different namespaces would silently drop one and leak it.
+//
+// Everything that keys into a manifest goes through here, so a resource and the removal
+// referring to it cannot disagree about their identity.
+func manifestKey(namespace, kind, name string) string {
+	return namespace + "/" + resourceKey(kind, name)
+}
+
+// keyOf is manifestKey for an already-decoded resource.
+func keyOf(r k8s.Resource) string {
+	return manifestKey(r.GetNamespace(), r.GetObjectKind().GroupVersionKind().Kind, r.GetName())
+}
+
+// key is manifestKey for a pending removal.
+func (t toRemove) key() string {
+	return manifestKey(t.namespace, t.kind, t.name)
+}
+
+// mergeResources overlays applied on top of old, keyed by manifestKey.
+//
+// Resources that were never applied stay at their old recorded form, which is exactly
+// what is still running in the cluster: an update that failed leaves the previous object
+// intact, and a resource that was never reached was never touched. Old resources that are
+// absent from applied are kept so that uninstall still removes them.
+func mergeResources(old, applied []k8s.Resource) []k8s.Resource {
+	var merged []k8s.Resource
+	index := map[string]int{}
+	var add = func(r k8s.Resource) {
+		key := keyOf(r)
+		if i, ok := index[key]; ok {
+			merged[i] = r
+			return
+		}
+		index[key] = len(merged)
+		merged = append(merged, r)
+	}
+	for _, r := range old {
+		add(r)
+	}
+	for _, r := range applied {
+		add(r)
+	}
+	return merged
+}
+
+// encodeResources serializes resources back into a multi-document manifest.
+//
+// Unstructured resources - which is what both GenManifest and DecodeAllYAML produce - are
+// marshalled from their raw content so the result round-trips byte-for-byte. Encoding them
+// through their typed structs instead would inject defaulted fields such as
+// spec.template.metadata.creationTimestamp, which show up as spurious diffs on the next
+// rollout and can trigger an unwanted StatefulSet rotation.
+func encodeResources(list []k8s.Resource) (string, error) {
+	var docs []string
+	for _, r := range list {
+		var data []byte
+		var err error
+		if u, ok := r.(*unstructured.Unstructured); ok {
+			data, err = sigsyaml.Marshal(u.UnstructuredContent())
+		} else {
+			data, err = k8s.EncodeYAML(r)
+		}
+		if err != nil {
+			return "", err
+		}
+		docs = append(docs, strings.TrimSpace(string(data)))
+	}
+	return "---\n" + strings.Join(docs, "\n---\n") + "\n", nil
+}
+
+// encodeManifest serializes resources and verifies the result reads back before anyone
+// stores it. Cheap assertion on a novel code path: every other manifest write stores a
+// string DecodeAllYAML had just parsed, while encodeResources serializes afresh, and
+// these writes replace an existing record - so never overwrite a readable manifest with
+// something that cannot be read back.
+func encodeManifest(list []k8s.Resource) (string, error) {
+	var value string
+	var err error
+	if value, err = encodeResources(list); err != nil {
+		return "", fmt.Errorf("failed to encode manifest: %w", err)
+	}
+	var decoded []k8s.Resource
+	if decoded, err = k8s.DecodeAllYAML(value); err != nil {
+		return "", fmt.Errorf("manifest does not round-trip: %w", err)
+	}
+	if len(decoded) != len(list) {
+		return "", fmt.Errorf("manifest round-trips to %d of %d resources", len(decoded), len(list))
+	}
+	return value, nil
+}
+
+// resourcesMatching returns the recorded resources the given removals refer to, in
+// recorded order so the manifest stays stable.
+//
+// A removal carrying a rotation suffix has no manifest entry of its own - the manifest
+// holds the canonical StatefulSet name - so it matches nothing, which is correct.
+func resourcesMatching(recorded []k8s.Resource, removals []toRemove) []k8s.Resource {
+	wanted := make(map[string]bool, len(removals))
+	for _, t := range removals {
+		wanted[t.key()] = true
+	}
+	var matched []k8s.Resource
+	for _, r := range recorded {
+		if wanted[keyOf(r)] {
+			matched = append(matched, r)
+		}
+	}
+	return matched
+}
+
+// finalManifest returns the manifest to record after a successful rollout.
+//
+// Normally that is the rendered manifest verbatim. When a removal failed, though, the
+// resource is still running, and the rendered manifest no longer mentions it - nothing
+// would ever delete it again - so it is merged back in. On success `applied` is every
+// rendered resource in canonical form, so the two merge cleanly.
+//
+// Falls back to the rendered manifest if that cannot be encoded, which is what would have
+// been written before this existed: the failed removals stop being tracked, but
+// everything else stays correct.
+func finalManifest(rc global.ResourceContext, old, applied []k8s.Resource, failedRemovals []toRemove, rendered, name string) string {
+	kept := resourcesMatching(old, failedRemovals)
+	if len(kept) == 0 {
+		return rendered
+	}
+	var value string
+	var err error
+	if value, err = encodeManifest(mergeResources(applied, kept)); err != nil {
+		rc.Logger().Warnf("could not record %d resource(s) whose removal failed for %s/%s, they will no longer be tracked: %s",
+			len(kept), rc.Namespace(), name, err)
+		return rendered
+	}
+	rc.Logger().Infof("keeping %d resource(s) whose removal failed in the manifest for %s/%s", len(kept), rc.Namespace(), name)
+	return value
+}
+
+// recordPartialManifest persists what is known to exist after a failed rollout, so that a
+// later uninstall can still clean it up and a retry still sees the un-applied resources as
+// changed. Best effort: failures here are logged, never returned, so they cannot mask the
+// rollout error that caused them.
+func recordPartialManifest(rc global.ResourceContext, old, applied []k8s.Resource, name string) {
+	merged := mergeResources(old, applied)
+	if len(merged) == 0 {
+		return
+	}
+	var value string
+	var err error
+	if value, err = encodeManifest(merged); err != nil {
+		rc.Logger().Warnf("not recording partial manifest for %s/%s, leaving the existing one untouched: %s", rc.Namespace(), name, err)
+		return
+	}
+	// Detach from the rollout's context. A cancelled or timed out context is itself a
+	// reason a rollout fails, and inheriting it here would mean the one case where the
+	// record matters most is the one case it never gets written. Values are preserved,
+	// only cancellation is dropped.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(rc.Context()), manifestWriteTimeout)
+	defer cancel()
+	if err = writeManifest(writeCtx, value, name, rc.Namespace()); err != nil {
+		rc.Logger().Warnf("failed to write partial manifest for %s/%s: %s", rc.Namespace(), name, err)
+		return
+	}
+	rc.Logger().Infof("recorded partial manifest for %s/%s with %d resource(s)", rc.Namespace(), name, len(merged))
+}
+
+var writeManifest = func(ctx context.Context, value, name, namespace string) error {
 
 	var manifest k8s.ConfigMap
 	manifest.Kind = k8s.KindConfigMap
@@ -361,11 +557,25 @@ func renameStss(list []k8s.Resource, stsNameToRealName map[string]string) {
 	}
 }
 
-func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (err error) {
+// apply rolls out the given resources and reports which of them are known to be present
+// in the cluster afterwards.
+//
+// The returned resources are the *canonical* ones, i.e. the pre-renameStss form, because
+// that is how the manifest ConfigMap is keyed. Callers use them to record what actually
+// landed when the rollout only partially succeeds.
+// It also reports the removals that failed. Those resources are still in the cluster, so
+// dropping them from the manifest - as writing the new desired manifest alone would -
+// would leave nothing tracking them and they would leak permanently.
+func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, wait time.Duration, changed map[string]bool) (applied []k8s.Resource, failedRemovals []toRemove, err error) {
+	// Snapshot before renameStss, which replaces StatefulSet entries in `new` with
+	// renamed copies. Index correspondence is preserved because it assigns in place.
+	canonical := make([]k8s.Resource, len(new))
+	copy(canonical, new)
+
 	stsNameToRealName := map[string]string{}
 	renameStss(new, stsNameToRealName)
 
-	for _, r := range new {
+	for i, r := range new {
 		kind := r.GetObjectKind().GroupVersionKind().Kind
 		key := resourceKey(kind, r.GetName())
 		if kind == k8s.KindHorizontalPodAutoscaler {
@@ -385,17 +595,28 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 		var didChange, exists bool
 		if didChange, exists = changed[key]; exists && !didChange {
 			rc.Logger().Infof(`applyManifest skipped for item: %s`, key)
+			// Unchanged relative to the recorded manifest, so it is already present.
+			applied = append(applied, canonical[i])
 			continue
 		}
 		rc.Logger().Debugf(`applyManifest going for item: %s,conditons: %t,%t`, key, didChange, exists)
-		if err = k8s.Rollout(rc.Context(), r, k8s.WithWait(wait)); err != nil {
+		if err = applyResource(rc.Context(), r, k8s.WithWait(wait)); err != nil {
+			// Deliberately not recorded. k8s.Rollout creates before it waits for
+			// readiness, so a failed wait can leave the object behind and that one does
+			// leak until the next successful rollout records it. Recording it anyway
+			// would be worse: we cannot tell that case apart from an admission or
+			// validation rejection where nothing was created, and recording a resource
+			// that does not exist makes the next rollout diff it against itself, skip
+			// it, and report success while it stays missing.
 			return
 		}
+		applied = append(applied, canonical[i])
 	}
 
 	for _, r := range toRemoves {
-		if err = k8s.Remove(rc.Context(), r.name, r.namespace, r.kind, k8s.WithWait(2*time.Minute)); err != nil {
+		if err = doRemove(rc.Context(), r.name, r.namespace, r.kind, k8s.WithWait(2*time.Minute)); err != nil {
 			rc.Logger().Warnf("failed to remove %s-%s/%s: %s", r.kind, r.namespace, r.name, err)
+			failedRemovals = append(failedRemovals, r)
 		}
 	}
 	err = nil
