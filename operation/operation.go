@@ -48,11 +48,14 @@ var getExistingManifest = func(ctx context.Context, name, namespace string) (exi
 	return
 }
 
-func getManifests(ctx context.Context, chartPath string, values raw.Map) (old []k8s.Resource, new []k8s.Resource, newMap map[string]*k8s.Resource, newStr string, err error) {
+// getManifests renders the chart and loads the previously recorded manifest. It also
+// returns the release name it read them under, so that whatever writes the manifest back
+// keys it identically - deriving that name twice is how reads and writes drift apart.
+func getManifests(ctx context.Context, chartPath string, values raw.Map) (name string, old []k8s.Resource, new []k8s.Resource, newMap map[string]*k8s.Resource, newStr string, err error) {
 	if new, newStr, err = k8s.GenManifest(ctx, chartPath, values); err != nil {
 		return
 	}
-	var name, namespace string
+	var namespace string
 	if name, err = raw.ChainGet[string](values, "global", "name"); err != nil {
 		return
 	}
@@ -288,19 +291,17 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 	var old, new []k8s.Resource
 	var newMap map[string]*k8s.Resource
 	var newStr string
-	if old, new, newMap, newStr, err = getManifests(rc.Context(), chartPath, values); err != nil {
+	// manifestName is the release name getManifests just read the existing manifest
+	// under, so writes below land where the next read will look. new[0].GetName() is not
+	// a safe substitute: helm does not guarantee the first rendered object is named
+	// exactly global.name, and a chart whose first resource is e.g. "<release>-sa" would
+	// have its manifest written somewhere nothing looks for it.
+	var manifestName string
+	if manifestName, old, new, newMap, newStr, err = getManifests(rc.Context(), chartPath, values); err != nil {
 		return err
 	}
 	if len(new) == 0 {
 		return fmt.Errorf("nothing to rollout")
-	}
-	// The release name, which is what getExistingManifest and Remove key their reads by.
-	// new[0].GetName() is not a safe substitute: helm does not guarantee the first
-	// rendered object is named exactly global.name, and a chart whose first resource is
-	// e.g. "<release>-sa" would have its manifest written somewhere nothing looks.
-	var manifestName string
-	if manifestName, err = raw.ChainGet[string](values, "global", "name"); err != nil {
-		return err
 	}
 
 	var toRemoves []toRemove
