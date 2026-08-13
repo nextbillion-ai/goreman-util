@@ -345,23 +345,7 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 		recordPartialManifest(rc, old, applied, manifestName)
 		return err
 	}
-	// A resource whose deletion failed is still running, so it has to stay in the
-	// manifest. Writing the desired manifest alone would drop it, and nothing would ever
-	// delete it again. On success `applied` is every rendered resource in canonical
-	// form, so the two merge cleanly.
-	if kept := resourcesFor(old, failedRemovals); len(kept) > 0 {
-		var value string
-		if value, err = encodeManifest(mergeResources(applied, kept)); err != nil {
-			// Fall back to the desired manifest, which is what would have been written
-			// before this existed. The failed removals leak, but adds stay tracked.
-			rc.Logger().Warnf("could not record %d resource(s) whose removal failed for %s/%s, they will no longer be tracked: %s",
-				len(kept), rc.Namespace(), manifestName, err)
-		} else {
-			rc.Logger().Infof("keeping %d resource(s) whose removal failed in the manifest for %s/%s", len(kept), rc.Namespace(), manifestName)
-			return writeManifest(rc.Context(), value, manifestName, rc.Namespace())
-		}
-	}
-	return writeManifest(rc.Context(), newStr, manifestName, rc.Namespace())
+	return writeManifest(rc.Context(), finalManifest(rc, old, applied, failedRemovals, newStr, manifestName), manifestName, rc.Namespace())
 }
 
 // applyResource is a seam over k8s.Rollout so that tests can drive partial failures.
@@ -475,6 +459,32 @@ func resourcesFor(recorded []k8s.Resource, removals []toRemove) []k8s.Resource {
 		}
 	}
 	return kept
+}
+
+// finalManifest returns the manifest to record after a successful rollout.
+//
+// Normally that is the rendered manifest verbatim. When a removal failed, though, the
+// resource is still running, and the rendered manifest no longer mentions it - nothing
+// would ever delete it again - so it is merged back in. On success `applied` is every
+// rendered resource in canonical form, so the two merge cleanly.
+//
+// Falls back to the rendered manifest if that cannot be encoded, which is what would have
+// been written before this existed: the failed removals stop being tracked, but
+// everything else stays correct.
+func finalManifest(rc global.ResourceContext, old, applied []k8s.Resource, failedRemovals []toRemove, rendered, name string) string {
+	kept := resourcesFor(old, failedRemovals)
+	if len(kept) == 0 {
+		return rendered
+	}
+	var value string
+	var err error
+	if value, err = encodeManifest(mergeResources(applied, kept)); err != nil {
+		rc.Logger().Warnf("could not record %d resource(s) whose removal failed for %s/%s, they will no longer be tracked: %s",
+			len(kept), rc.Namespace(), name, err)
+		return rendered
+	}
+	rc.Logger().Infof("keeping %d resource(s) whose removal failed in the manifest for %s/%s", len(kept), rc.Namespace(), name)
+	return value
 }
 
 // recordPartialManifest persists what is known to exist after a failed rollout, so that a

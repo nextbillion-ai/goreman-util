@@ -419,6 +419,38 @@ func TestApplyReportsFailedRemovals(t *testing.T) {
 	assert.Equal(t, "stuck", failed[0].name)
 }
 
+func TestFinalManifest(t *testing.T) {
+	decode := func(y string) k8s.Resource {
+		r, err := k8s.DecodeYAML(y)
+		if err != nil {
+			panic(err)
+		}
+		return r
+	}
+	svc := decode("kind: Service\nmetadata:\n  name: svc1\n  namespace: ns")
+	stuck := decode("kind: ConfigMap\nmetadata:\n  name: stuck\n  namespace: ns")
+	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
+
+	// nothing failed: the rendered manifest is stored verbatim
+	got := finalManifest(rc, []k8s.Resource{svc, stuck}, []k8s.Resource{svc}, nil, "RENDERED", "release1")
+	assert.Equal(t, "RENDERED", got)
+
+	// a removal failed: the resource is merged back in so it stays tracked
+	got = finalManifest(rc, []k8s.Resource{svc, stuck}, []k8s.Resource{svc},
+		[]toRemove{{name: "stuck", namespace: "ns", kind: k8s.KindConfigMap}}, "RENDERED", "release1")
+	assert.NotEqual(t, "RENDERED", got)
+	back, err := k8s.DecodeAllYAML(got)
+	assert.NoError(t, err)
+	assert.Len(t, back, 2)
+	assert.Equal(t, "svc1", back[0].GetName())
+	assert.Equal(t, "stuck", back[1].GetName())
+
+	// a removal that matches nothing recorded leaves the rendered manifest alone
+	got = finalManifest(rc, []k8s.Resource{svc}, []k8s.Resource{svc},
+		[]toRemove{{name: "sts1---0", namespace: "ns", kind: k8s.KindStatefulSet}}, "RENDERED", "release1")
+	assert.Equal(t, "RENDERED", got)
+}
+
 func TestResourcesForMatchesRemovalsByIdentity(t *testing.T) {
 	decode := func(y string) k8s.Resource {
 		r, err := k8s.DecodeYAML(y)
