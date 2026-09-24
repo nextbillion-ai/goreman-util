@@ -351,6 +351,9 @@ func Rollout(rc global.ResourceContext, chartPath string, values raw.Map, option
 
 // applyResource is a seam over k8s.Rollout so that tests can drive partial failures.
 var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.OperationOption) error {
+	if r.GetObjectKind().GroupVersionKind().Kind == kindNetworkPolicy {
+		return applyNetworkPolicyResource(ctx, r)
+	}
 	return k8s.Rollout(ctx, r, options...)
 }
 
@@ -658,6 +661,9 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 }
 
 var doRemove = func(ctx context.Context, name, namespace string, kind k8s.Kind, options ...k8s.OperationOption) error {
+	if kind == kindNetworkPolicy {
+		return removeNetworkPolicyResource(ctx, name, namespace)
+	}
 	return k8s.Remove(ctx, name, namespace, kind, options...)
 }
 
