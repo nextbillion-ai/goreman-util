@@ -11,7 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/raw"
+	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestShouldRenameHP(t *testing.T) {
@@ -612,6 +616,47 @@ func TestRecordPartialManifestSkipsWhenNothingToRecord(t *testing.T) {
 	rc := global.NewContext(context.Background(), global.WithLogLevel(logrus.ErrorLevel))
 	recordPartialManifest(rc, nil, nil, "release1")
 	assert.False(t, called)
+}
+
+func TestPrepareResourceForApplyPreservesPVCBinding(t *testing.T) {
+	r, err := k8s.DecodeYAML("kind: PersistentVolumeClaim\nmetadata:\n  name: workspace\n  namespace: agent\nspec:\n  accessModes: [ReadWriteOnce]\n  resources:\n    requests:\n      storage: 20Gi")
+	assert.NoError(t, err)
+
+	orgGetPVC := getPersistentVolumeClaim
+	defer func() { getPersistentVolumeClaim = orgGetPVC }()
+	getPersistentVolumeClaim = func(ctx context.Context, name, namespace string) (*k8s.PersistentVolumeClaim, error) {
+		assert.Equal(t, "workspace", name)
+		assert.Equal(t, "agent", namespace)
+		return &k8s.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, ResourceVersion: "42"},
+			Spec:       v1.PersistentVolumeClaimSpec{VolumeName: "pvc-bound-volume"},
+		}, nil
+	}
+
+	prepared, err := prepareResourceForApply(context.Background(), r)
+	assert.NoError(t, err)
+	pvc, err := k8s.Parse[*k8s.PersistentVolumeClaim](prepared)
+	assert.NoError(t, err)
+	assert.Empty(t, pvc.ResourceVersion)
+	assert.Equal(t, "pvc-bound-volume", pvc.Spec.VolumeName)
+}
+
+func TestPrepareResourceForApplyLeavesNewPVCUnbound(t *testing.T) {
+	r, err := k8s.DecodeYAML("kind: PersistentVolumeClaim\nmetadata:\n  name: workspace\n  namespace: agent\nspec:\n  accessModes: [ReadWriteOnce]\n  resources:\n    requests:\n      storage: 20Gi")
+	assert.NoError(t, err)
+
+	orgGetPVC := getPersistentVolumeClaim
+	defer func() { getPersistentVolumeClaim = orgGetPVC }()
+	getPersistentVolumeClaim = func(ctx context.Context, name, namespace string) (*k8s.PersistentVolumeClaim, error) {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "persistentvolumeclaims"}, name)
+	}
+
+	prepared, err := prepareResourceForApply(context.Background(), r)
+	assert.NoError(t, err)
+	pvc, err := k8s.Parse[*k8s.PersistentVolumeClaim](prepared)
+	assert.NoError(t, err)
+	assert.Empty(t, pvc.ResourceVersion)
+	assert.Empty(t, pvc.Spec.VolumeName)
 }
 
 func TestRemove(t *testing.T) {
