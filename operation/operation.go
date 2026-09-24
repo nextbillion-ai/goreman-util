@@ -20,6 +20,7 @@ import (
 	"github.com/nextbillion-ai/goreman-util/global"
 	"github.com/zhchang/goquiver/k8s"
 	"github.com/zhchang/goquiver/raw"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	sigsyaml "sigs.k8s.io/yaml"
@@ -353,6 +354,35 @@ var applyResource = func(ctx context.Context, r k8s.Resource, options ...k8s.Ope
 	return k8s.Rollout(ctx, r, options...)
 }
 
+// getPersistentVolumeClaim is a seam over the live read used to preserve
+// Kubernetes-assigned binding fields before updating an existing PVC.
+var getPersistentVolumeClaim = func(ctx context.Context, name, namespace string) (*k8s.PersistentVolumeClaim, error) {
+	return k8s.Get[*k8s.PersistentVolumeClaim](ctx, name, namespace)
+}
+
+// prepareResourceForApply keeps server-assigned PVC fields that are immutable after
+// binding. A rendered chart intentionally omits spec.volumeName, while the live PVC has
+// it populated by Kubernetes. Replacing the live object with the rendered form would
+// therefore try to clear volumeName and every later rollout would fail validation.
+func prepareResourceForApply(ctx context.Context, r k8s.Resource) (k8s.Resource, error) {
+	if r.GetObjectKind().GroupVersionKind().Kind != k8s.KindPersistentVolumeClaim {
+		return r, nil
+	}
+	desired, err := k8s.Parse[*k8s.PersistentVolumeClaim](r)
+	if err != nil {
+		return nil, err
+	}
+	live, err := getPersistentVolumeClaim(ctx, desired.GetName(), desired.GetNamespace())
+	if k8serrors.IsNotFound(err) {
+		return desired, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	desired.Spec.VolumeName = live.Spec.VolumeName
+	return desired, nil
+}
+
 // manifestWriteTimeout bounds the detached write of a partial manifest. Because the
 // write ignores the caller's cancellation, this is also the worst case delay it can add
 // to Rollout returning its error - keep it comfortably above a single ConfigMap write
@@ -600,7 +630,11 @@ func apply(rc global.ResourceContext, new []k8s.Resource, toRemoves []toRemove, 
 			continue
 		}
 		rc.Logger().Debugf(`applyManifest going for item: %s,conditons: %t,%t`, key, didChange, exists)
-		if err = applyResource(rc.Context(), r, k8s.WithWait(wait)); err != nil {
+		var prepared k8s.Resource
+		if prepared, err = prepareResourceForApply(rc.Context(), r); err != nil {
+			return
+		}
+		if err = applyResource(rc.Context(), prepared, k8s.WithWait(wait)); err != nil {
 			// Deliberately not recorded. k8s.Rollout creates before it waits for
 			// readiness, so a failed wait can leave the object behind and that one does
 			// leak until the next successful rollout records it. Recording it anyway
